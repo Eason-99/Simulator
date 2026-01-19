@@ -33,7 +33,7 @@ class MetricsCalculator:
         # GMV: 总交易额（Gross Merchandise Value）
         gmv = driver_reward_table['current_overall_reward'].sum()
         
-        # OCR: 订单完成率（Order Completion Rate）
+        # ORR: 订单完成率（Order Response Rate）
         num_matched_requests = len(matched_requests)
         ocr = num_matched_requests / num_all_requests if num_all_requests > 0 else 0.0
         
@@ -118,7 +118,7 @@ class MetricsCalculator:
             f.write(f"matched requests num: {metrics.get('num_matched_requests', 0)}, "
                    f"all requests num: {metrics.get('num_all_requests', 0)}\n")
             f.write(f"GMV: {metrics.get('gmv', 0):.2f}, "
-                   f"OCR: {metrics.get('ocr', 0) * 100:.2f}%\n")
+                   f"ORR: {metrics.get('ocr', 0) * 100:.2f}%\n")
             if 'avg_reward_per_order' in metrics:
                 f.write(f"Average reward per order: {metrics['avg_reward_per_order']:.2f}\n")
             if 'avg_orders_per_driver' in metrics:

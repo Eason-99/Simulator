@@ -3,15 +3,6 @@
 创建demo数据集，包含若干订单和司机
 模拟一个坐标系，默认经纬度范围在北半球西经
 生成的文件将保存到config中指定的data_dir/dataset目录
-
-配置:
-    cfg = {
-        "lng_range": (-180, 0),  # 经度范围 (默认北半球西经)
-        "lat_range": (0, 90),   # 纬度范围 (默认北半球)
-        "driver_count": 3,      # 司机数量
-        "total_orders": 4,      # 订单总数
-        "max_orders_per_interval": 2  # 每个时间间隔的最大订单数
-    }
 """
 
 import os
@@ -25,6 +16,7 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config.config import Config
+from environment.utils import distance
 
 # 配置
 cfg = {
@@ -91,12 +83,14 @@ def generate_demo_data(config: Config = None):
 
     for order_id in range(1, total_orders + 1):
         if current_order_count == max_orders_per_interval:
-            interval_time += 60  # 进入下一个时间间隔
+            interval_time += 60 * 2  # 进入下一个时间间隔
             request_all[date][str(interval_time)] = []
             current_order_count = 0
 
         origin = generate_random_coordinates(cfg["lng_range"], cfg["lat_range"])
         dest = generate_random_coordinates(cfg["lng_range"], cfg["lat_range"])
+        trip_distance = distance(origin, dest)  # 使用 utils 中的 distance 方法计算曼哈顿距离
+        trip_time = trip_distance / config.vehicle_speed  # 根据速度计算行程时间
         order = [
             f'order_{order_id:03d}',  # order_id
             origin[0],  # origin_lng
@@ -104,8 +98,8 @@ def generate_demo_data(config: Config = None):
             dest[0],  # dest_lng
             dest[1],  # dest_lat
             np.random.uniform(10, 20),  # immediate_reward
-            np.random.uniform(500, 2000),  # trip_distance (米)
-            np.random.uniform(300, 1200),  # trip_time (秒)
+            trip_distance,  # trip_distance (米)
+            trip_time,  # trip_time (秒)
             np.random.uniform(10, 20),  # designed_reward
         ]
         request_all[date][str(interval_time)].append(order)

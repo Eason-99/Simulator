@@ -106,3 +106,18 @@ class DebugLogger:
             logging.debug("Driver States:")
             logging.debug("\n" + driver_table.to_string(index=False))
             logging.debug("--------------------------------------------------")
+
+    def log_in_progress_orders(self, matched_requests):
+        """
+        打印所有进行中的订单信息
+
+        Args:
+            matched_requests (pd.DataFrame): 匹配的订单表 (即进行中的订单)
+        """
+        if self.debug_mode:
+            logging.debug("In-Progress Orders:")
+            if not matched_requests.empty:
+                logging.debug("\n" + matched_requests.to_string(index=False))
+            else:
+                logging.debug("No orders currently in progress.")
+            logging.debug("--------------------------------------------------")

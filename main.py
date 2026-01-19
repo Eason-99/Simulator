@@ -168,7 +168,7 @@ def main(config: Config, algorithm: ODDRAlgorithmInterface):
         
         # 打印每日结果
         print(f"  GMV: {daily_metrics['gmv']:.2f}")
-        print(f"  OCR: {daily_metrics['ocr'] * 100:.2f}%")
+        print(f"  ORR: {daily_metrics['ocr'] * 100:.2f}%")
         print(f"  Matched: {daily_metrics['num_matched_requests']}/{daily_metrics['num_all_requests']}")
         
         # 保存每日结果（可选）
@@ -219,7 +219,7 @@ def main(config: Config, algorithm: ODDRAlgorithmInterface):
     print("Simulation Complete!")
     print("=" * 50)
     print(f"Total GMV: {overall_metrics['total_gmv']:.2f}")
-    print(f"Overall OCR: {overall_metrics['overall_ocr'] * 100:.2f}%")
+    print(f"Overall ORR: {overall_metrics['overall_ocr'] * 100:.2f}%")
     print(f"Total Matched: {overall_metrics['total_matched']}/{overall_metrics['total_requests']}")
     print("=" * 50)
 

@@ -15,11 +15,11 @@ class Config:
     # end_date: str = '2015-07-31'
     start_time: float = 0
     # end_time: float = 86400
-    end_time: float = 600
+    end_time: float = 720
     delta_t: float = 60  # 时间步长（秒）
     
     # 车辆参数
-    vehicle_speed: float = 6330  # 车辆速度（米/秒）
+    vehicle_speed: float = 6  # 车辆速度（米/秒）
     pickup_dis_threshold: float = 200000  # 接单距离阈值（米）
     # pickup_dis_threshold: float = 950  # 接单距离阈值（米）
     
@@ -38,7 +38,4 @@ class Config:
     # 保存路径
     save_dir: str = 'save'
     description: str = 'test'
-    
-    # 其他参数
-    num_zones: int = 263
 

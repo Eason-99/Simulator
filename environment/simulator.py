@@ -136,6 +136,9 @@ class Simulator:
         for col in cols_to_float:
             if col in self.driver_table.columns:
                 self.driver_table[col] = self.driver_table[col].astype(float)
+        # 强制将 matched_order_id 设为 object 类型，以便存入字符串
+        # if 'matched_order_id' in self.driver_table.columns:
+        self.driver_table['matched_order_id'] = self.driver_table['matched_order_id'].astype(object)
 
         # 初始化订单表
         request_tables = self.state_manager.initialize_request_tables()
@@ -260,7 +263,7 @@ class Simulator:
             step_time=self.curent_experiment_time,
             num_orders=len(self.wait_requests),
             num_idle_drivers=len(self.driver_table[self.driver_table['status'] == 0]),
-            num_matched_orders=len(self.matched_requests_buffer[-1]) # buffer的最后一个元素才是这个step匹配的订单
+            num_matched_orders=len(self.matched_requests_buffer[0]) if self.matched_requests_buffer else 0 # buffer的第一个元素才是这个step匹配的订单
         )
         
         # Step 5: 更新状态
@@ -541,9 +544,15 @@ class Simulator:
         self.wait_requests = self.state_manager.update_request_wait_time(
             self.wait_requests, self.delta_t
         )
-
+        
+        # TODO：理论上应该每天整合，但是debug需要每个step看一下订单状态
+        self.finalize_run()
+        
         # 记录司机状态
         debug_logger.log_driver_states(self.driver_table)
+        
+        # 记录进行中的订单状态
+        debug_logger.log_in_progress_orders(self.matched_requests)
 
     def _update_time(self):
         """更新时间"""
