@@ -39,3 +39,7 @@ class Config:
     save_dir: str = 'save'
     description: str = 'test'
 
+    # 日志参数
+    log_level: int = 2  # 0: NO, 1: INFO(flow/warn), 2: STA(stat/loop), 3: DEBUG
+    log_file: str = "debug.log"
+

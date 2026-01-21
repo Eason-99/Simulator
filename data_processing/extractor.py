@@ -8,6 +8,10 @@ import pickle
 import os
 from typing import Dict, Any
 import pandas as pd
+from log_utils.logger import Logger
+
+# 初始化 Logger
+logger = Logger()
 
 
 class DataExtractor:
@@ -24,6 +28,7 @@ class DataExtractor:
         os.makedirs(output_dir, exist_ok=True)
     
     def extract_from_parquet(self, parquet_path: str, output_name: str, n_rows: int = None) -> str:
+        logger.log_info(f"Starting extraction from {parquet_path}", module="extractor")
         """
         从parquet文件提取并过滤订单请求数据，保存为Simulator所需的字典格式pickle。
         Simulator期望的格式：{ 'YYYY-MM-DD': { 'seconds_from_start': [[order_id, lat, lng, ...], ...], ... }, ... }
@@ -98,7 +103,13 @@ class DataExtractor:
         with open(output_path, 'wb') as f:
             pickle.dump(request_all, f)
         
-        print(f"Extraction complete. Data saved to: {output_path}")
+        logger.log_info(f"Extraction complete. Data saved to: {output_path}", module="extractor")
+        logger.log_statistics(f"Extracted statistics for {output_name}:", module="extractor")
+        for date, times in request_all.items():
+            total_orders = sum(len(orders) for orders in times.values())
+            logger.log_statistics(f"  Date: {date} | Time slots: {len(times)} | Total orders: {total_orders}", module="extractor")
+            
+        logger.log_debug(f"Full extracted data structure preview for {output_name}", data=request_all, module="extractor")
         return output_path
     
     def test_parquet_extraction(self, parquet_path: str):
@@ -109,30 +120,21 @@ class DataExtractor:
             parquet_path: parquet文件路径
         """
         if not os.path.exists(parquet_path):
-            print(f"Error: File not found - {parquet_path}")
+            logger.log_info(f"Error: File not found - {parquet_path}", module="extractor")
             return
             
+        logger.log_info(f"Testing parquet extraction for {parquet_path}", module="extractor")
         # 读取parquet文件
         df = pd.read_parquet(parquet_path)
         
         # 提取前2条数据
         head_2 = df.head(2)
         
-        print(f"\n{'='*20} Parquet Preview: {os.path.basename(parquet_path)} {'='*20}")
+        logger.log_debug(f"Parquet Columns/Rows info for {os.path.basename(parquet_path)}", data=head_2, module="extractor")
         
-        # 获取列名和数据
-        columns = df.columns
-        for col in columns:
-            val1 = head_2.iloc[0][col] if len(head_2) > 0 else "N/A"
-            val2 = head_2.iloc[1][col] if len(head_2) > 1 else "N/A"
-            # 竖着打印：每一行对应一列（列名 + 前2个数据值）
-            print(f"Column: {col:<25} | Val1: {str(val1):<20} | Val2: {str(val2):<20}")
-            
-        print(f"{'='*60}")
-        # 打印总列数和数据条数
-        print(f"Total Columns: {len(df.columns)}")
-        print(f"Total Rows:    {len(df)}")
-        print(f"{'='*60}\n")
+        logger.log_statistics(f"Parquet Statistics: {os.path.basename(parquet_path)}", module="extractor")
+        logger.log_statistics(f"  Total Columns: {len(df.columns)}", module="extractor")
+        logger.log_statistics(f"  Total Rows:    {len(df)}", module="extractor")
 
 
 if __name__ == "__main__":
@@ -144,19 +146,5 @@ if __name__ == "__main__":
     
     # 执行测试函数
     extractor.test_parquet_extraction(target_parquet)
-    
-    def extract_drivers(self, parquet_path: str, dataset_name: str) -> str:
-        """
-        提取司机数据
-        
-        Args:
-            parquet_path: parquet文件路径
-            dataset_name: 数据集名称
-            
-        Returns:
-            输出pickle文件路径
-        """
-        output_name = f"{dataset_name}/df_driver_info_100"
-        os.makedirs(os.path.join(self.output_dir, dataset_name), exist_ok=True)
-        return self.extract_from_parquet(parquet_path, output_name)
+
 

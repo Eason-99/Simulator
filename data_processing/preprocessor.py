@@ -9,9 +9,10 @@ import os
 import random
 import copy
 from typing import Any, Dict, List, Optional, Tuple
+from log_utils.logger import Logger
 
-# 全局Debug打印开关：0-不打印，1-打印总数统计，2-额外打印详细增减信息
-DEBUG_LEVEL = 1
+# 初始化 Logger
+logger = Logger()
 
 
 class DataPreprocessor:
@@ -112,8 +113,7 @@ class DataPreprocessor:
                             new_order[1] = random.choice(target_zones)
                             requests.append(new_order)
                             
-                            if DEBUG_LEVEL >= 2:
-                                print(f"[ADD] Date: {date}, Time: {time_key}, ID: {new_order[0]}, From: {new_order[1]}, To: {new_order[3]}")
+                            logger.log_debug(f"[ADD] Date: {date}, Time: {time_key}, ID: {new_order[0]}, From: {new_order[1]}, To: {new_order[3]}", module="preprocessor")
                 else:
                     # 减少订单：移除符合区域条件的订单
                     # 找到符合区域条件的索引
@@ -124,8 +124,7 @@ class DataPreprocessor:
                         # 按索引从大到小删除
                         for idx in sorted(remove_indices, reverse=True):
                             removed_order = requests.pop(idx)
-                            if DEBUG_LEVEL >= 2:
-                                print(f"[REMOVE] Date: {date}, Time: {time_key}, ID: {removed_order[0]}")
+                            logger.log_debug(f"[REMOVE] Date: {date}, Time: {time_key}, ID: {removed_order[0]}", module="preprocessor")
                             
         return new_data
 
@@ -137,8 +136,6 @@ class DataPreprocessor:
                    add_config: Optional[Dict] = None,
                    remove_config: Optional[Dict] = None) -> str:
         """
-        重写预处理函数
-        
         Args:
             input_name: 输入pickle文件名（不含扩展名）
             suffix: 输出文件名后缀
@@ -157,10 +154,8 @@ class DataPreprocessor:
         with open(input_path, 'rb') as f:
             data = pickle.load(f)
             
-        # DEBUG 统计修改前
-        initial_count = 0
-        if DEBUG_LEVEL >= 1:
-            initial_count = self._count_orders(data)
+        # 统计修改前
+        initial_count = self._count_orders(data)
             
         # 1. 选取数据
         processed_data = self.select_data(data, ratio, random_select)
@@ -185,13 +180,13 @@ class DataPreprocessor:
                 is_add=False
             )
             
-        # DEBUG 统计修改后
-        if DEBUG_LEVEL >= 1:
-            final_count = self._count_orders(processed_data)
-            print(f"\n{'='*20} Preprocessing Stats {'='*20}")
-            print(f"Initial Total Orders: {initial_count}")
-            print(f"Final Total Orders:   {final_count}")
-            print(f"{'='*50}\n")
+        # 统计修改后
+        final_count = self._count_orders(processed_data)
+        logger.log_statistics("=" * 50, module="preprocessor")
+        logger.log_statistics("Preprocessing Stats", module="preprocessor")
+        logger.log_statistics(f"Initial Total Orders: {initial_count}", module="preprocessor")
+        logger.log_statistics(f"Final Total Orders:   {final_count}", module="preprocessor")
+        logger.log_statistics("=" * 50, module="preprocessor")
             
         output_path = os.path.join(self.output_dir, f"{input_name}{suffix}.pickle")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -199,7 +194,7 @@ class DataPreprocessor:
         with open(output_path, 'wb') as f:
             pickle.dump(processed_data, f)
             
-        print(f"Preprocessed data saved to: {output_path}")
+        logger.log_info(f"Preprocessed data saved to: {output_path}", module="preprocessor")
         return output_path
 
     def preprocess_requests(self, dataset_name: str, **kwargs) -> str:
@@ -221,8 +216,6 @@ if __name__ == "__main__":
     # 实例化预处理器
     preprocessor = DataPreprocessor(input_dir="data/large", output_dir="data/large")
     
-    # 设置 DEBUG_LEVEL 为 2 以查看详细增减信息
-    DEBUG_LEVEL = 2
     
     # 演示：对第一个订单所在的区域及时间，增加10条订单
     # 1. 首先读取原始数据获取第一条订单的信息

@@ -22,14 +22,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from interface.algorithm_interface import ODDRAlgorithmInterface
 from interface.result_processor import ResultProcessor
 
-# 添加 DEBUG_MODE 开关
-DEBUG_MODE = True
+# 导入 Logger
+from log_utils.logger import Logger
 
-# 导入 DebugLogger
-from debug.debug_logger import DebugLogger
-
-# 初始化 DebugLogger
-debug_logger = DebugLogger(debug_mode=DEBUG_MODE)
+# 初始化 Logger (单例)
+logger = Logger()
 
 
 class Simulator:
@@ -237,7 +234,7 @@ class Simulator:
         # TODO: 实现历史订单数计算
 
         # 调试打印订单-司机候选对信息
-        debug_logger.log_order_driver_info(wait_requests, driver_table)
+        logger.log_order_driver_info(wait_requests, driver_table, module="simulator")
         
         # Step 3: 调用算法接口
         # 调用算法进行匹配
@@ -259,7 +256,7 @@ class Simulator:
             self._apply_dispatch_plan(final_plan, wait_requests, driver_table)
 
         # 在 update_time 之前打印调试信息
-        debug_logger.log_step_info(
+        logger.log_step_info(
             step_time=self.curent_experiment_time,
             num_orders=len(self.wait_requests),
             num_idle_drivers=len(self.driver_table[self.driver_table['status'] == 0]),
@@ -269,114 +266,6 @@ class Simulator:
         # Step 5: 更新状态
         self._update_state()
         self._update_time()
-    
-    # def _apply_dispatch_plan(self,
-    #                          dispatch_plan: List[Tuple[str, str]],
-    #                          wait_requests: pd.DataFrame,
-    #                          driver_table: pd.DataFrame):
-    #     """
-    #     应用匹配方案
-        
-    #     Args:
-    #         dispatch_plan: 匹配方案 [(order_id, driver_id), ...]
-    #         wait_requests: 等待订单
-    #         driver_table: 司机表
-    #     """
-    #     if len(dispatch_plan) == 0:
-    #         return
-        
-    #     # 转换为DataFrame
-    #     matched_pairs = pd.DataFrame(dispatch_plan, columns=['order_id', 'driver_id'])
-        
-    #     # 计算接单距离
-    #     pickup_distances = []
-    #     for _, pair in matched_pairs.iterrows():
-    #         order = wait_requests[wait_requests['order_id'] == pair['order_id']]
-    #         driver = driver_table[driver_table['driver_id'] == pair['driver_id']]
-    #         if len(order) > 0 and len(driver) > 0:
-    #             dist = distance_array(
-    #                 np.array([[order.iloc[0]['origin_lng'], order.iloc[0]['origin_lat']]]),
-    #                 np.array([[driver.iloc[0]['lng'], driver.iloc[0]['lat']]])
-    #             )[0]
-    #             pickup_distances.append(dist)
-    #         else:
-    #             pickup_distances.append(0.0)
-        
-    #     matched_pairs['pickup_distance'] = pickup_distances
-    #     matched_pairs['weight'] = 1.0
-        
-    #     # 找到匹配的订单
-    #     matched_order_ids = matched_pairs['order_id'].values.tolist()
-    #     con_matched = self.wait_requests['order_id'].isin(matched_order_ids)
-    #     con_keep_wait = self.wait_requests['wait_time'] <= self.wait_requests['maximum_wait_time']
-        
-    #     df_matched = self.wait_requests[con_matched].reset_index(drop=True)
-        
-    #     if len(df_matched) == 0:
-    #         return
-        
-    #     # 更新匹配订单信息
-    #     idle_driver_table = self.driver_table[self.driver_table['status'] == 0]
-    #     cor_order = []
-    #     cor_driver = []
-    #     for i in range(len(matched_pairs)):
-    #         order_id = matched_pairs.iloc[i]['order_id']
-    #         driver_id = matched_pairs.iloc[i]['driver_id']
-    #         if order_id in df_matched['order_id'].values:
-    #             cor_order.append(df_matched[df_matched['order_id'] == order_id].index[0])
-    #             driver_idx = idle_driver_table[idle_driver_table['driver_id'] == driver_id].index
-    #             if len(driver_idx) > 0:
-    #                 cor_driver.append(driver_idx[0])
-    #             else:
-    #                 cor_driver.append(None)
-        
-    #     # 过滤掉无效的匹配
-    #     valid_indices = [i for i, d in enumerate(cor_driver) if d is not None]
-    #     if len(valid_indices) == 0:
-    #         return
-        
-    #     cor_order = [cor_order[i] for i in valid_indices]
-    #     cor_driver = [cor_driver[i] for i in valid_indices]
-    #     matched_pairs = matched_pairs.iloc[valid_indices].reset_index(drop=True)
-    #     df_matched = df_matched.iloc[cor_order].reset_index(drop=True)
-        
-    #     cor_driver = np.array(cor_driver)
-        
-    #     # 更新订单信息
-    #     new_matched_requests = df_matched.copy()
-    #     new_matched_requests['t_matched'] = self.time
-    #     new_matched_requests['pickup_distance'] = matched_pairs['pickup_distance'].values
-    #     new_matched_requests['pickup_time'] = new_matched_requests['pickup_distance'].values / self.vehicle_speed
-    #     new_matched_requests['t_end'] = self.time + new_matched_requests['pickup_time'].values + \
-    #                                     new_matched_requests['trip_time'].values
-    #     new_matched_requests['status'] = 1
-    #     new_matched_requests['driver_id'] = matched_pairs['driver_id'].values
-        
-    #     # 更新司机状态
-    #     self.driver_table.loc[cor_driver, 'status'] = 1
-    #     self.driver_table.loc[cor_driver, 'target_loc_lng'] = new_matched_requests['dest_lng'].values
-    #     self.driver_table.loc[cor_driver, 'target_loc_lat'] = new_matched_requests['dest_lat'].values
-    #     self.driver_table.loc[cor_driver, 'remaining_time'] = (
-    #         new_matched_requests['t_end'].values - new_matched_requests['t_matched'].values
-    #     ).astype(float)
-    #     self.driver_table.loc[cor_driver, 'matched_order_id'] = new_matched_requests['order_id'].values
-    #     self.driver_table.loc[cor_driver, 'total_idle_time'] = 0
-        
-    #     # 更新司机奖励表
-    #     for _, matched_pair in new_matched_requests.iterrows():
-    #         driver_id = matched_pair['driver_id']
-    #         immediate_reward = float(matched_pair['immediate_reward'])
-    #         self.driver_reward_table.loc[
-    #             self.driver_reward_table['driver_id'] == driver_id, 'current_overall_reward'] += float(immediate_reward)
-    #         self.driver_reward_table.loc[
-    #             self.driver_reward_table['driver_id'] == driver_id, 'num_finished_order'] += 1
-        
-    #     # 更新订单表
-    #     self.matched_requests = pd.concat([self.matched_requests, new_matched_requests], axis=0)
-    #     self.matched_requests = self.matched_requests.reset_index(drop=True)
-        
-    #     # 更新等待订单表
-    #     self.wait_requests = self.wait_requests[~con_matched & con_keep_wait].reset_index(drop=True)
 
     def _apply_dispatch_plan(self,
                              dispatch_plan: List[Tuple[str, str]],
@@ -549,10 +438,10 @@ class Simulator:
         self.finalize_run()
         
         # 记录司机状态
-        debug_logger.log_driver_states(self.driver_table)
-        
+        logger.log_driver_states(self.driver_table, module="simulator")
+
         # 记录进行中的订单状态
-        debug_logger.log_in_progress_orders(self.matched_requests)
+        logger.log_in_progress_orders(self.matched_requests, module="simulator")
 
     def _update_time(self):
         """更新时间"""
