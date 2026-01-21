@@ -3,6 +3,7 @@ import os
 import sys
 import pandas as pd
 from typing import Any, Dict, List, Union
+from config.config import Config
 
 class Logger:
     """
@@ -65,11 +66,11 @@ class Logger:
 
         self._initialized = True
 
-    def set_level(self, level: int):
+    def set_level(self, config: Config, level: int):
         """动态设置日志级别"""
         self.log_level = level
         # 重新配置处理器（如果需要动态切换控制台输出，可以在这里处理）
-        self.init_logger() # 简单处理，实际生产可能需要更细致的 Handler 管理
+        self.init_logger(config=config, level=level) # 传入 config
 
     def _truncate_data(self, data: Any, max_rows: int = 5) -> str:
         """针对列表、字典、DataFrame 超过 max_rows 条数据时进行截断"""

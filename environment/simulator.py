@@ -13,6 +13,7 @@ from typing import Dict, Any, List, Tuple
 
 from .state_manager import StateManager
 from .utils import distance_array
+from config.config import Config # Add this import
 
 # 使用绝对导入（从项目根目录）
 import sys
@@ -37,17 +38,8 @@ class Simulator:
                  driver_info: pd.DataFrame,
                  order_num_origin: pd.DataFrame,
                  algorithm: ODDRAlgorithmInterface,
-                 result_processor: ResultProcessor = None,
-                 start_date: str = '2015-07-27',
-                 end_date: str = '2015-07-31',
-                 start_time: float = 0,
-                 end_time: float = 86400,
-                 delta_t: float = 60,
-                 vehicle_speed: float = 6.33,
-                 pickup_dis_threshold: float = 950,
-                 maximum_wait_time_mean: float = 300,
-                 max_idle_time: float = 300,
-                 request_interval: float = 60):
+                 config: Config, # Add config object
+                 result_processor: ResultProcessor = None):
         """
         初始化仿真器
         
@@ -56,29 +48,22 @@ class Simulator:
             driver_info: 司机信息DataFrame
             order_num_origin: 订单数量数据
             algorithm: ODDR算法接口实例
+            config: 配置对象
             result_processor: 结果处理器（可选）
-            start_date: 开始日期
-            end_date: 结束日期
-            start_time: 开始时间（秒）
-            end_time: 结束时间（秒）
-            delta_t: 时间步长（秒）
-            vehicle_speed: 车辆速度（米/秒）
-            pickup_dis_threshold: 接单距离阈值（米）
-            maximum_wait_time_mean: 最大等待时间均值（秒）
-            max_idle_time: 最大空闲时间（秒）
-            request_interval: 订单生成间隔（秒）
         """
-        # 基本参数
-        self.start_date = start_date
-        self.end_date = end_date
-        self.t_initial = start_time
-        self.t_end = end_time
-        self.delta_t = delta_t
-        self.vehicle_speed = vehicle_speed
-        self.pickup_dis_threshold = pickup_dis_threshold
-        self.maximum_wait_time_mean = maximum_wait_time_mean
-        self.max_idle_time = max_idle_time
-        self.request_interval = request_interval
+        self.config = config # Store config
+
+        # 基本参数 (从 config 读取)
+        self.start_date = config.start_date
+        self.end_date = config.end_date
+        self.t_initial = config.start_time
+        self.t_end = config.end_time
+        self.delta_t = config.delta_t
+        self.vehicle_speed = config.vehicle_speed
+        self.pickup_dis_threshold = config.pickup_dis_threshold
+        self.maximum_wait_time_mean = config.maximum_wait_time_mean
+        self.max_idle_time = config.max_idle_time
+        self.request_interval = config.request_interval
         
         # 数据
         self.request_all = request_all

@@ -10,6 +10,7 @@ import random
 import copy
 from typing import Any, Dict, List, Optional, Tuple
 from log_utils.logger import Logger
+from config.config import Config
 
 # 初始化 Logger
 logger = Logger()
@@ -18,17 +19,17 @@ logger = Logger()
 class DataPreprocessor:
     """数据预处理器 - 支持数据过滤和模拟增减"""
     
-    def __init__(self, input_dir: str = "data", output_dir: str = "data"):
+    def __init__(self, config: Config):
         """
         初始化数据预处理器
         
         Args:
-            input_dir: 输入目录路径
-            output_dir: 输出目录路径
+            config: 配置对象
         """
-        self.input_dir = input_dir
-        self.output_dir = output_dir
-        os.makedirs(output_dir, exist_ok=True)
+        self.config = config
+        self.input_dir = config.preprocessor_input_data_dir
+        self.output_dir = config.preprocessor_output_data_dir
+        os.makedirs(self.output_dir, exist_ok=True)
     
     def _count_orders(self, data: Dict[str, Dict[str, List]]) -> int:
         """计算字典中所有订单的总数"""
@@ -130,7 +131,7 @@ class DataPreprocessor:
 
     def preprocess(self, 
                    input_name: str, 
-                   suffix: str = "_processed",
+                   suffix: str = "",
                    ratio: float = 1.0,
                    random_select: bool = False,
                    add_config: Optional[Dict] = None,
@@ -188,7 +189,10 @@ class DataPreprocessor:
         logger.log_statistics(f"Final Total Orders:   {final_count}", module="preprocessor")
         logger.log_statistics("=" * 50, module="preprocessor")
             
-        output_path = os.path.join(self.output_dir, f"{input_name}{suffix}.pickle")
+        output_path = os.path.join(
+            self.output_dir,
+            f"{input_name}{suffix}{self.config.preprocessor_output_extension}"
+        )
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
         with open(output_path, 'wb') as f:
@@ -201,48 +205,19 @@ class DataPreprocessor:
         """
         预处理订单请求数据
         """
-        input_full_name = f"{dataset_name}/all_requests_0.1"
+        # dataset_name 假设现在是目录名，而不是文件前缀
+        input_full_name = os.path.join(
+            dataset_name, self.config.preprocessor_input_requests_basename
+        )
         return self.preprocess(input_full_name, **kwargs)
 
     def preprocess_drivers(self, dataset_name: str, **kwargs) -> str:
         """
         预处理司机数据
         """
-        input_full_name = f"{dataset_name}/df_driver_info_100"
+        # dataset_name 假设现在是目录名，而不是文件前缀
+        input_full_name = os.path.join(
+            dataset_name, self.config.preprocessor_input_drivers_basename
+        )
         return self.preprocess(input_full_name, **kwargs)
 
-
-if __name__ == "__main__":
-    # 实例化预处理器
-    preprocessor = DataPreprocessor(input_dir="data/large", output_dir="data/large")
-    
-    
-    # 演示：对第一个订单所在的区域及时间，增加10条订单
-    # 1. 首先读取原始数据获取第一条订单的信息
-    input_file = "data/large/all_requests_0.1.pickle"
-    if os.path.exists(input_file):
-        with open(input_file, 'rb') as f:
-            raw_data = pickle.load(f)
-        
-        # 获取第一天、第一个时间点的第一条订单
-        first_date = sorted(raw_data.keys())[0]
-        first_time_key = sorted(raw_data[first_date].keys())[0]
-        first_order = raw_data[first_date][first_time_key][0]
-        
-        target_zone = first_order[1] # PULocationID
-        target_time = int(first_time_key)
-        
-        print(f"Targeting Zone: {target_zone} at Time: {target_time} (Date: {first_date})")
-        
-        # 2. 执行预处理增加订单
-        preprocessor.preprocess(
-            input_name="all_requests_0.1",
-            suffix="_extra_orders",
-            add_config={
-                'zones': [target_zone],
-                'ranges': [(target_time, target_time)],
-                'count': 10
-            }
-        )
-    else:
-        print(f"File not found for main demo: {input_file}")

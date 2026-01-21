@@ -2,6 +2,7 @@ import os
 import pickle
 import geopandas as gpd
 from typing import Tuple, Optional, Dict
+from config.config import Config
 
 class TaxiZoneSpatialIndexer:
     """
@@ -9,15 +10,19 @@ class TaxiZoneSpatialIndexer:
     功能：读取几何数据，转换为经纬度坐标，计算区域质心，并提供查询接口。
     """
 
-    def __init__(self, shapefile_dir: str, pickle_filename: str = "zone_centroids.pkl"):
+    def __init__(self, config: Config):
         """
         初始化处理器。
 
-        :param shapefile_dir: 包含 .shp, .shx, .dbf 等文件的文件夹路径
-        :param pickle_filename: 用于存储或读取质心数据的 pickle 文件名
+        :param config: 配置对象
         """
-        self.shapefile_path = os.path.join(shapefile_dir, "taxi_zones.shp")
-        self.pickle_path = os.path.join(shapefile_dir, pickle_filename)
+        self.config = config
+        self.shapefile_path = os.path.join(
+            config.taxi_zone_shapefile_dir, config.taxi_zone_shapefile_name
+        )
+        self.pickle_path = os.path.join(
+            config.extractor_output_data_dir, config.taxi_zone_centroids_pickle_filename
+        )
         self.centroid_map: Dict[int, Tuple[float, float]] = {}
         
         # 如果 pickle 文件不存在，自动执行处理流程
@@ -93,25 +98,3 @@ class TaxiZoneSpatialIndexer:
                 self._process_and_cache_data()
 
         return self.centroid_map.get(zone_id)
-
-# --- 使用示例 ---
-if __name__ == "__main__":
-    # 1. 从目录 "taxi_zones" 读取文件
-    folder_name = "taxi_zones"
-    
-    # 2. 实例化并执行读取、转化
-    try:
-        indexer = TaxiZoneSpatialIndexer(shapefile_dir=folder_name)
-
-        # 3. 查询序号为 1, 2, 263 区域的经纬度并分别打印
-        test_ids = [1, 2, 263]
-        print("\n--- 区域经纬度查询测试 ---")
-        for zone_id in test_ids:
-            coords = indexer.get_coordinates(zone_id)
-            if coords:
-                print(f"区域 {zone_id:3d} 的中心坐标为: 经度 {coords[0]:10.6f}, 纬度 {coords[1]:10.6f}")
-            else:
-                print(f"区域 {zone_id:3d}: 未找到对应数据")
-        print("--------------------------\n")
-    except Exception as e:
-        print(f"运行测试时出错: {e}")

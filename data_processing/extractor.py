@@ -8,6 +8,7 @@ import pickle
 import os
 from typing import Dict, Any
 import pandas as pd
+from config.config import Config
 from log_utils.logger import Logger
 
 # 初始化 Logger
@@ -17,15 +18,16 @@ logger = Logger()
 class DataExtractor:
     """数据提取器 - 当前版本仅创建空pickle占位"""
     
-    def __init__(self, output_dir: str = "data"):
+    def __init__(self, config: Config):
         """
         初始化数据提取器
         
         Args:
-            output_dir: 输出目录路径
+            config: 配置对象
         """
-        self.output_dir = output_dir
-        os.makedirs(output_dir, exist_ok=True)
+        self.config = config
+        self.output_dir = config.extractor_output_data_dir
+        os.makedirs(self.output_dir, exist_ok=True)
     
     def extract_from_parquet(self, parquet_path: str, output_name: str, n_rows: int = None) -> str:
         logger.log_info(f"Starting extraction from {parquet_path}", module="extractor")
@@ -41,7 +43,10 @@ class DataExtractor:
         Returns:
             输出pickle文件路径
         """
-        output_path = os.path.join(self.output_dir, f"{output_name}.pickle")
+        output_path = os.path.join(
+            self.output_dir,
+            f"{output_name}{self.config.extractor_output_pickle_extension}"
+        )
         
         # 加载数据，如果指定了 n_rows 则只读取前 N 行
         # 注意：pandas read_parquet 本身不支持 nrows 参数，但我们可以读取后 head(N)
@@ -135,16 +140,3 @@ class DataExtractor:
         logger.log_statistics(f"Parquet Statistics: {os.path.basename(parquet_path)}", module="extractor")
         logger.log_statistics(f"  Total Columns: {len(df.columns)}", module="extractor")
         logger.log_statistics(f"  Total Rows:    {len(df)}", module="extractor")
-
-
-if __name__ == "__main__":
-    # 实例化提取器
-    extractor = DataExtractor(output_dir="data")
-    
-    # 定义目标 parquet 文件路径
-    target_parquet = "yellow_tripdata_2025-01.parquet"
-    
-    # 执行测试函数
-    extractor.test_parquet_extraction(target_parquet)
-
-
