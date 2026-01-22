@@ -6,10 +6,11 @@
 
 import pickle
 import os
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 import pandas as pd
 from config.config import Config
 from log_utils.logger import Logger
+from interface.data_structure import Order # 导入新的Order数据结构
 
 # 初始化 Logger
 logger = Logger()
@@ -67,42 +68,43 @@ class DataExtractor:
         # 这里维持 60s 的步长取整，并转为字符串
         df['time_key'] = (df['seconds'] // 60 * 60).astype(str)
         
-        # 3. 构造 Simulator 期望的列表数据
-        # Simulator 内部 _generate_new_orders 解析顺序：
-        # order_id = request[0]
-        # requests = request[1:] -> [origin_lng, origin_lat, dest_lng, dest_lat, immediate_reward, trip_distance, trip_time, designed_reward]
-        
-        # 映射列名（根据 yellow_tripdata 的标准列名）
-        # 如果列名不匹配，请根据 test_parquet_extraction 的输出进行调整
+        # 3. 构造 Simulator 期望的列表数据，结构参考 Order 数据类
         df_processed = pd.DataFrame()
-        df_processed['order_id'] = df.index.astype(str) # 使用索引作为 ID
-        df_processed['origin_lng'] = df['PULocationID'] # 简化处理：Parquet通常是ID，Simulator可能需要经纬度
-        df_processed['origin_lat'] = df['PULocationID']
-        df_processed['dest_lng'] = df['DOLocationID']
-        df_processed['dest_lat'] = df['DOLocationID']
-        df_processed['immediate_reward'] = df['total_amount']
-        df_processed['trip_distance'] = df['trip_distance']
-        # 计算 trip_time (秒)
+        df_processed['order_id'] = df.index.astype(int)  # 使用索引作为 ID，并转换为 int
+        df_processed['origin_grid_id'] = df['PULocationID']
+        df_processed['dest_grid_id'] = df['DOLocationID']
+        df_processed['request_time'] = df['seconds'].astype(float)  # 将相对秒数作为请求时间
         df_processed['trip_time'] = (pd.to_datetime(df['tpep_dropoff_datetime']) -
-                                     df['pickup_datetime']).dt.total_seconds()
-        df_processed['designed_reward'] = df['total_amount']
+                                     df['pickup_datetime']).dt.total_seconds().astype(float)
+        df_processed['price'] = df['total_amount'].astype(float)
         
         # 附加辅助列用于分组
         df_processed['date'] = df['date']
         df_processed['time_key'] = df['time_key']
         
-        # 4. 转换为嵌套字典结构
-        request_all = {}
+        # 4. 转换为嵌套字典结构，其中包含 Order 对象
+        request_all: Dict[str, Dict[str, List[Order]]] = {}
+        
         for date, date_group in df_processed.groupby('date'):
             request_all[date] = {}
             for time_key, time_group in date_group.groupby('time_key'):
-                # 转换为 Simulator _generate_new_orders 期望的 list of lists
-                # 每个 list 格式: [id, lng, lat, dlng, dlat, reward, dist, time, d_reward]
-                data_list = time_group[[
-                    'order_id', 'origin_lng', 'origin_lat', 'dest_lng', 'dest_lat',
-                    'immediate_reward', 'trip_distance', 'trip_time', 'designed_reward'
-                ]].values.tolist()
-                request_all[date][time_key] = data_list
+                orders_list: List[Order] = []
+                for _, row in time_group.iterrows():
+                    order = Order(
+                        order_id=row['order_id'],
+                        origin_grid_id=row['origin_grid_id'],
+                        dest_grid_id=row['dest_grid_id'],
+                        request_time=row['request_time'],
+                        max_wait_time=self.config.maximum_wait_time_mean, # cfg中设置的默认最大等待时间
+                        trip_time=row['trip_time'],
+                        price=row['price'],
+                        origin_lng=None,  # 保持为空
+                        origin_lat=None,  # 保持为空
+                        dest_lng=None,    # 保持为空
+                        dest_lat=None     # 保持为空
+                    )
+                    orders_list.append(order)
+                request_all[date][time_key] = orders_list
         
         # 保存为 pickle
         with open(output_path, 'wb') as f:
@@ -114,29 +116,6 @@ class DataExtractor:
             total_orders = sum(len(orders) for orders in times.values())
             logger.log_statistics(f"  Date: {date} | Time slots: {len(times)} | Total orders: {total_orders}", module="extractor")
             
-        logger.log_debug(f"Full extracted data structure preview for {output_name}", data=request_all, module="extractor")
+        logger.log_debug(f"Full extracted data structure preview for {output_name}", data=request_all, module="extractor") # 包含大量订单对象数据
         return output_path
     
-    def test_parquet_extraction(self, parquet_path: str):
-        """
-        测试函数：提取指定parquet文件的前2条数据并按要求打印
-        
-        Args:
-            parquet_path: parquet文件路径
-        """
-        if not os.path.exists(parquet_path):
-            logger.log_info(f"Error: File not found - {parquet_path}", module="extractor")
-            return
-            
-        logger.log_info(f"Testing parquet extraction for {parquet_path}", module="extractor")
-        # 读取parquet文件
-        df = pd.read_parquet(parquet_path)
-        
-        # 提取前2条数据
-        head_2 = df.head(2)
-        
-        logger.log_debug(f"Parquet Columns/Rows info for {os.path.basename(parquet_path)}", data=head_2, module="extractor")
-        
-        logger.log_statistics(f"Parquet Statistics: {os.path.basename(parquet_path)}", module="extractor")
-        logger.log_statistics(f"  Total Columns: {len(df.columns)}", module="extractor")
-        logger.log_statistics(f"  Total Rows:    {len(df)}", module="extractor")

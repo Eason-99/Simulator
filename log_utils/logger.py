@@ -73,26 +73,52 @@ class Logger:
         self.init_logger(config=config, level=level) # 传入 config
 
     def _truncate_data(self, data: Any, max_rows: int = 5) -> str:
-        """针对列表、字典、DataFrame 超过 max_rows 条数据时进行截断"""
+        """针对列表、字典、DataFrame 超过 max_rows 条数据时进行截断，并以表格或多行格式打印"""
         if isinstance(data, pd.DataFrame):
             total = len(data)
             if total > max_rows:
-                return f"\n(Truncated: Showing first {max_rows} of {total} rows)\n{data.head(max_rows).to_string()}\n..."
-            return f"\n{data.to_string()}"
+                # 使用 to_string() 获得表格格式，并添加截断信息
+                truncated_df_str = data.head(max_rows).to_string(index=False)
+                return f"\n--- DataFrame (Total: {total} rows, Showing first {max_rows} rows) ---\n{truncated_df_str}\n..."
+            return f"\n--- DataFrame (Total: {total} rows) ---\n{data.to_string(index=False)}"
         
         elif isinstance(data, list):
             total = len(data)
+            output_lines = []
+            if data and isinstance(data[0], dict):
+                # 如果是字典列表，尝试转换为 DataFrame
+                try:
+                    df = pd.DataFrame(data)
+                    return self._truncate_data(df, max_rows) # 递归调用处理 DataFrame
+                except Exception:
+                    # 如果转换失败，退回到通用列表处理
+                    pass
+
+            # 通用列表处理
             if total > max_rows:
-                return f" (Total: {total}, showing first {max_rows}): {str(data[:max_rows])}..."
-            return str(data)
+                output_lines.append(f"--- List (Total: {total} items, Showing first {max_rows} items) ---")
+                for i, item in enumerate(data[:max_rows]):
+                    output_lines.append(f"  [{i}]: {str(item)}")
+                output_lines.append("...")
+            else:
+                output_lines.append(f"--- List (Total: {total} items) ---")
+                for i, item in enumerate(data):
+                    output_lines.append(f"  [{i}]: {str(item)}")
+            return "\n" + "\n".join(output_lines)
         
         elif isinstance(data, dict):
             total = len(data)
+            output_lines = []
             if total > max_rows:
-                keys = list(data.keys())
-                truncated_dict = {k: data[k] for k in keys[:max_rows]}
-                return f" (Total keys: {total}, showing first {max_rows}): {str(truncated_dict)}..."
-            return str(data)
+                output_lines.append(f"--- Dictionary (Total keys: {total}, Showing first {max_rows} key-value pairs) ---")
+                for i, (key, value) in enumerate(list(data.items())[:max_rows]):
+                    output_lines.append(f"  '{key}': {str(value)}")
+                output_lines.append("...")
+            else:
+                output_lines.append(f"--- Dictionary (Total keys: {total}) ---")
+                for key, value in data.items():
+                    output_lines.append(f"  '{key}': {str(value)}")
+            return "\n" + "\n".join(output_lines)
         
         return str(data)
 
@@ -147,11 +173,11 @@ class Logger:
 
     # --- 迁移自 inspect_data.py 的特定方法 ---
 
-    def log_dataframe_info(self, df: pd.DataFrame, name: str, file_path: str = ""):
-        msg = f"Dataframe Info: [{name}] {file_path}"
-        if isinstance(df, pd.DataFrame):
-            info = {"shape": df.shape, "columns": list(df.columns)}
-            self.log_info(f"{msg} | Meta: {info}")
-            self.log_debug(f"{msg} | Full Preview", data=df)
-        else:
-            self.log_info(f"{msg} | Type: {type(df)}")
+    # def log_dataframe_info(self, df: pd.DataFrame, name: str, file_path: str = ""):
+    #     msg = f"Dataframe Info: [{name}] {file_path}"
+    #     if isinstance(df, pd.DataFrame):
+    #         info = {"shape": df.shape, "columns": list(df.columns)}
+    #         self.log_info(f"{msg} | Meta: {info}")
+    #         self.log_debug(f"{msg} | Full Preview", data=df)
+    #     else:
+    #         self.log_info(f"{msg} | Type: {type(df)}")

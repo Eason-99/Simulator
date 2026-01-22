@@ -8,10 +8,12 @@ import sys
 import pickle
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Dict, List, Optional, Tuple
 
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from interface.data_structure import Order # 导入Order数据结构
 
 import argparse
 from config.config import Config
@@ -29,7 +31,7 @@ from log_utils.logger import Logger
 logger = Logger()
 
 
-def load_data(config: Config) -> tuple:
+def load_data(config: Config) -> Tuple[Dict[str, Dict[str, List[Order]]], pd.DataFrame]:
     """
     加载数据
     
@@ -37,7 +39,7 @@ def load_data(config: Config) -> tuple:
         config: 配置对象
         
     Returns:
-        tuple: (request_all, driver_info, order_num_origin)
+        Tuple: (request_all, driver_info) - request_all现在包含Order对象
     """
     # 加载请求数据
     request_file = config.simulator_requests_data_path
@@ -55,21 +57,12 @@ def load_data(config: Config) -> tuple:
     if os.path.exists(driver_file):
         with open(driver_file, 'rb') as f:
             driver_info = pickle.load(f)
-        logger.log_dataframe_info(driver_info, "Driver Info", driver_file, module="main")
+        logger.log_debug(f"Loaded Driver Info from {driver_file}", data=driver_info, module="main")
     else:
         logger.log_info(f"Warning: Driver file not found: {driver_file}, using empty DataFrame", module="main")
         driver_info = pd.DataFrame()
 
-    # 加载订单数量数据
-    order_num_file = config.simulator_order_num_origin_path
-    if os.path.exists(order_num_file):
-        order_num_origin = pd.read_csv(order_num_file)
-        logger.log_dataframe_info(order_num_origin, "Order Number Origin", order_num_file, module="main")
-    else:
-        logger.log_info(f"Warning: Order num file not found: {order_num_file}, using empty DataFrame", module="main")
-        order_num_origin = pd.DataFrame()
-
-    return request_all, driver_info, order_num_origin
+    return request_all, driver_info
 
 
 def run_simulation(config: Config, algorithm: ODDRAlgorithmInterface):
@@ -86,8 +79,8 @@ def run_simulation(config: Config, algorithm: ODDRAlgorithmInterface):
     
     # 加载数据
     logger.log_info("[1/5] Loading data...", module="main")
-    request_all, driver_info, order_num_origin = load_data(config)
-    logger.log_info("Data loaded successfully.", module="main")
+    request_all, driver_info = load_data(config)
+    logger.log_info("[1/5] Data loaded successfully.", module="main")
     
     # 初始化结果处理器
     result_processor = ResultProcessor()
@@ -97,21 +90,11 @@ def run_simulation(config: Config, algorithm: ODDRAlgorithmInterface):
     simulator = Simulator(
         request_all=request_all,
         driver_info=driver_info,
-        order_num_origin=order_num_origin,
         algorithm=algorithm,
         result_processor=result_processor,
-        start_date=config.start_date,
-        end_date=config.end_date,
-        start_time=config.start_time,
-        end_time=config.end_time,
-        delta_t=config.delta_t,
-        vehicle_speed=config.vehicle_speed,
-        pickup_dis_threshold=config.pickup_dis_threshold,
-        maximum_wait_time_mean=config.maximum_wait_time_mean,
-        max_idle_time=config.max_idle_time,
-        request_interval=config.request_interval
+        config=config
     )
-    logger.log_info("Simulator initialized.")
+    logger.log_info("[2/5] Simulator initialized.")
     
     # 初始化效果计算器
     metrics_calculator = MetricsCalculator()
@@ -227,7 +210,7 @@ def run_extractor(config: Config):
     parquet_path = os.path.join(raw_dir, config.extractor_parquet_filename)
     
     if os.path.exists(parquet_path):
-        extractor.extract_from_parquet(parquet_path, config.extractor_output_pickle_basename)
+        extractor.extract_from_parquet(parquet_path, config.extractor_output_pickle_basename, 100000) # 先取10w条
     else:
         logger.log_info(f"Error: Parquet file not found at {parquet_path}", module="main")
 
@@ -242,7 +225,9 @@ def run_preprocessor(config: Config):
     
     if os.path.exists(os.path.join(processed_dir, f"{input_name}{config.preprocessor_input_extension}")):
         # 默认按原样处理或可以添加采样逻辑
-        preprocessor.preprocess(input_name=input_name, suffix="_processed", ratio=1.0)
+        preprocessor.preprocess(input_name=input_name, suffix=config.preprocessor_output_suffix, ratio=1.0)
+        # 生成初始化司机数据
+        preprocessor.generate_drivers()
     else:
         logger.log_info(f"Error: Pickle file not found at {processed_dir}/{input_name}.pickle", module="main")
 
@@ -274,9 +259,9 @@ def main():
     logger.init_logger(log_file_path=log_file_full_path, level=config.log_level)
     
     modes = {
-        "--1": "extractor",
-        "--2": "data_preprocessing",
-        "--3": "taxi_zone",
+        "--1": "taxi_zone",
+        "--2": "extractor",
+        "--3": "data_preprocessing",
         "--4": "sim"
     }
     
@@ -285,9 +270,9 @@ def main():
         print("\n使用指南 (Guidance):")
         print("用法: python main.py [参数代号]")
         print("\n可用模式 (Available modes):")
-        print("  --1  - 执行数据提取器功能 (从 data/data_raw 提取 parquet)")
-        print("  --2  - 执行数据预处理功能 (对 data/data_processed 进行预处理)")
-        print("  --3  - 执行出租车区域处理器功能 (处理 data/data_raw 中的区域数据)")
+        print("  --1  - 执行出租车区域处理器功能 (处理 data/data_raw 中的区域数据并提取边界)")
+        print("  --2  - 执行数据提取器功能 (从 data/data_raw 提取 parquet)")
+        print("  --3  - 执行数据预处理功能 (包括订单坐标转换和随机司机生成)")
         print("  --4  - 运行仿真主程序 (Simulation)")
         print("\n示例: python main.py --4")
         return
@@ -308,4 +293,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -23,14 +23,18 @@ class TaxiZoneSpatialIndexer:
         self.pickle_path = os.path.join(
             config.extractor_output_data_dir, config.taxi_zone_centroids_pickle_filename
         )
+        self.boundary_pickle_path = os.path.join(
+            config.extractor_output_data_dir, config.taxi_zone_boundary_pickle_filename
+        )
         self.centroid_map: Dict[int, Tuple[float, float]] = {}
+        self.boundary: Dict[str, float] = {} # {'min_lng': ..., 'max_lng': ..., 'min_lat': ..., 'max_lat': ...}
         
         # 如果 pickle 文件不存在，自动执行处理流程
-        if not os.path.exists(self.pickle_path):
-            print(f"[Info] 缓存文件未找到，开始处理 Shapefile: {self.shapefile_path}")
+        if not os.path.exists(self.pickle_path) or not os.path.exists(self.boundary_pickle_path):
+            print(f"[Info] taxi_zone 缓存文件未找到或不完整，开始处理 Shapefile: {self.shapefile_path}")
             self._process_and_cache_data()
         else:
-            print(f"[Info] 检测到缓存文件，准备就绪。")
+            print(f"[Info] 检测到 taxi_zone 缓存文件，准备就绪。")
 
     def _process_and_cache_data(self):
         """
@@ -71,11 +75,29 @@ class TaxiZoneSpatialIndexer:
                 except KeyError:
                     continue
 
-            # 5. 存入 Pickle 文件
+            # 5. 计算总体边界范围
+            # 使用转换后的经纬度计算全局范围
+            all_lons = [coords[0] for coords in self.centroid_map.values()]
+            all_lats = [coords[1] for coords in self.centroid_map.values()]
+            
+            if all_lons and all_lats:
+                self.boundary = {
+                    'min_lng': min(all_lons),
+                    'max_lng': max(all_lons),
+                    'min_lat': min(all_lats),
+                    'max_lat': max(all_lats)
+                }
+
+            # 6. 存入 Pickle 文件
             with open(self.pickle_path, 'wb') as f:
                 pickle.dump(self.centroid_map, f)
             
-            print(f"[Success] 处理完成。已缓存 {len(self.centroid_map)} 个区域的坐标至 {self.pickle_path}")
+            with open(self.boundary_pickle_path, 'wb') as f:
+                pickle.dump(self.boundary, f)
+            
+            print(f"[Success] 处理完成。")
+            print(f"  - 已缓存 {len(self.centroid_map)} 个区域坐标至 {self.pickle_path}")
+            print(f"  - 已缓存边界范围至 {self.boundary_pickle_path}: {self.boundary}")
 
         except Exception as e:
             print(f"[Error] 处理 Shapefile 时发生错误: {e}")
@@ -98,3 +120,18 @@ class TaxiZoneSpatialIndexer:
                 self._process_and_cache_data()
 
         return self.centroid_map.get(zone_id)
+
+    def get_boundary(self) -> Dict[str, float]:
+        """
+        接口：返回整个数据集的经纬度边界范围。
+
+        :return: 包含 min_lng, max_lng, min_lat, max_lat 的字典
+        """
+        if not self.boundary:
+            if os.path.exists(self.boundary_pickle_path):
+                with open(self.boundary_pickle_path, 'rb') as f:
+                    self.boundary = pickle.load(f)
+            else:
+                self._process_and_cache_data()
+        
+        return self.boundary

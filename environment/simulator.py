@@ -14,6 +14,7 @@ from typing import Dict, Any, List, Tuple
 from .state_manager import StateManager
 from .utils import distance_array
 from config.config import Config # Add this import
+from interface.data_structure import Order # Import Order class
 
 # 使用绝对导入（从项目根目录）
 import sys
@@ -34,9 +35,8 @@ class Simulator:
     """环境仿真器"""
     
     def __init__(self,
-                 request_all: Dict[str, Any],
+                 request_all: Dict[str, Dict[str, List[Order]]], # Update type hint
                  driver_info: pd.DataFrame,
-                 order_num_origin: pd.DataFrame,
                  algorithm: ODDRAlgorithmInterface,
                  config: Config, # Add config object
                  result_processor: ResultProcessor = None):
@@ -44,9 +44,8 @@ class Simulator:
         初始化仿真器
         
         Args:
-            request_all: 所有订单请求数据（字典，键为日期）
+            request_all: 所有订单请求数据（字典，键为日期，内含 Order 对象列表）
             driver_info: 司机信息DataFrame
-            order_num_origin: 订单数量数据
             algorithm: ODDR算法接口实例
             config: 配置对象
             result_processor: 结果处理器（可选）
@@ -68,7 +67,6 @@ class Simulator:
         # 数据
         self.request_all = request_all
         self.driver_info = driver_info
-        self.order_num_origin = order_num_origin
         
         # 算法接口
         self.algorithm = algorithm
@@ -172,10 +170,11 @@ class Simulator:
             return pd.DataFrame()
         
         # 构建候选对
+        # 使用 Order 对象的属性作为 DataFrame 的列名
         request_array = wait_requests.loc[:, [
             'order_id', 'trip_time', 'origin_lng', 'origin_lat', 'dest_lng', 'dest_lat',
-            'immediate_reward', 'wait_time', 'maximum_wait_time',
-            'origin_order_num_1h_ago', 'dest_order_num_1h_ago'
+            'price', 'wait_time', 'max_wait_time', # 对应 Order 对象的属性
+            'origin_grid_id', 'dest_grid_id' # 添加 grid ID，如果算法需要
         ]].values
         request_array = np.repeat(request_array, num_idle_driver, axis=0)
         
@@ -192,13 +191,19 @@ class Simulator:
             return pd.DataFrame()
         
         # 构建DataFrame
+        # 更新 columns_name 以匹配新的 request_array 结构
         columns_name = [
             'driver_id', 'order_id', 'trip_time', 'origin_lng', 'origin_lat', 'dest_lng', 'dest_lat',
-            'immediate_reward', 'wait_time', 'maximum_wait_time', 'origin_order_num_1h_ago', 'dest_order_num_1h_ago', 'order_driver_distance'
+            'price', 'wait_time', 'max_wait_time', # 对应 Order 对象的属性
+            'origin_grid_id', 'dest_grid_id', # 添加 grid ID
+            'order_driver_distance'
         ]
+        # request_array 的列索引需要重新计算
+        # 假设 order_id, trip_time, origin_lng, origin_lat, dest_lng, dest_lat, price, wait_time, max_wait_time, origin_grid_id, dest_grid_id
+        # 对应 request_array 的 0-10 列
         order_driver_pair = np.hstack((
-            driver_loc_array[flag, 2].reshape(-1, 1),
-            request_array[flag, 0:11].reshape(-1, 11),
+            driver_loc_array[flag, 2].reshape(-1, 1), # driver_id
+            request_array[flag, 0:11], # order_id 到 dest_grid_id
             dis_array[flag].reshape(-1, 1)
         ))
         
@@ -265,7 +270,7 @@ class Simulator:
         # 2. 向量化计算距离 (替代原本的 iterrows 循环)
         # 将订单坐标 merge 进来
         matched_pairs = matched_pairs.merge(
-            wait_requests[['order_id', 'origin_lng', 'origin_lat']], 
+            wait_requests[['order_id', 'origin_lng', 'origin_lat', 'dest_lng', 'dest_lat', 'trip_time', 'price', 'max_wait_time', 'origin_grid_id', 'dest_grid_id']],
             on='order_id', how='left'
         )
         # 将司机坐标 merge 进来
@@ -283,8 +288,8 @@ class Simulator:
         
         # 3. 筛选有效订单 (逻辑保持不变，但利用 merge 的结果更安全)
         valid_mask = (
-            self.wait_requests['order_id'].isin(matched_pairs['order_id']) & 
-            (self.wait_requests['wait_time'] <= self.wait_requests['maximum_wait_time'])
+            self.wait_requests['order_id'].isin(matched_pairs['order_id']) &
+            (self.wait_requests['wait_time'] <= self.wait_requests['max_wait_time']) # 更改为 max_wait_time
         )
         df_matched = self.wait_requests[valid_mask].copy()
         

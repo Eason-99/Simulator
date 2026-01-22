@@ -7,7 +7,6 @@ from abc import ABC, abstractmethod
 from typing import List, Tuple, Dict, Any
 import pandas as pd
 
-
 class ODDRAlgorithmInterface(ABC):
     """
     ODDR算法接口抽象类
