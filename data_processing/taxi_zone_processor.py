@@ -135,3 +135,18 @@ class TaxiZoneSpatialIndexer:
                 self._process_and_cache_data()
         
         return self.boundary
+
+    def get_all_zone_ids(self) -> list[int]:
+        """
+        接口：返回所有已知的出租车区域编号。
+
+        :return: 包含所有区域编号的列表
+        """
+        if not self.centroid_map:
+            if os.path.exists(self.pickle_path):
+                with open(self.pickle_path, 'rb') as f:
+                    self.centroid_map = pickle.load(f)
+            else:
+                self._process_and_cache_data()
+        
+        return list(self.centroid_map.keys())

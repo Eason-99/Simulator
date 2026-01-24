@@ -5,13 +5,12 @@
 - reposition: 随机分配（随机选择一个网格）
 """
 
-import pandas as pd
 import numpy as np
 import random
 from typing import List, Tuple
 from interface.algorithm_interface import ODDRAlgorithmInterface
 from environment.utils import distance_array
-
+from interface.data_structure import Order, OrderContext, OrderStatus, Driver, DriverContext, VehicleStatus # Import Order, OrderContext and Driver classes
 
 class ExampleAlgorithm(ODDRAlgorithmInterface):
     """
@@ -24,10 +23,8 @@ class ExampleAlgorithm(ODDRAlgorithmInterface):
         pass
     
     def dispatch(self,
-                 wait_requests: pd.DataFrame,
-                 driver_table: pd.DataFrame,
-                 driver_reward_table: pd.DataFrame,
-                 current_time: str,
+                 wait_requests: List[Order],
+                 drivers: List[Driver],
                  **kwargs) -> List[Tuple[str, str]]:
         """
         订单-司机匹配 - 就近分配策略
@@ -36,60 +33,55 @@ class ExampleAlgorithm(ODDRAlgorithmInterface):
         
         Args:
             wait_requests: 等待匹配的订单
-            driver_table: 司机状态表
-            driver_reward_table: 司机奖励表
-            current_time: 当前时间
+            drivers: 司机状态表
             **kwargs: 其他参数（可能包含pickup_dis_threshold等）
             
         Returns:
             List[Tuple[str, str]]: 匹配方案 [(order_id, driver_id), ...]
         """
         # 找到空闲司机
-        idle_drivers = driver_table[driver_table['status'] == 0].copy()
-        
-        if len(wait_requests) == 0 or len(idle_drivers) == 0:
+        idle_drivers = [driver for driver in drivers if driver.status == VehicleStatus.IDLE]
+
+        if not wait_requests or not idle_drivers:
             return []
-        
+
         matches = []
-        used_drivers = set()
-        
+        used_driver_ids = set()
+
         # 对每个订单，找到距离最近的空闲司机
-        for _, order in wait_requests.iterrows():
-            order_id = str(order['order_id'])
-            order_origin = np.array([[order['origin_lng'], order['origin_lat']]])
-            
-            # 计算该订单起点到所有空闲司机的距离
+        for order in wait_requests:
+            order_id = str(order.order_id)
+            order_origin = np.array([[order.origin_lng, order.origin_lat]])
+
             min_distance = float('inf')
             best_driver_id = None
-            best_driver_idx = None
-            
+
             # 遍历所有空闲司机
-            for idx, (_, driver) in enumerate(idle_drivers.iterrows()):
-                driver_id = str(driver['driver_id'])
-                
+            for driver in idle_drivers:
+                driver_id = str(driver.vehicle_id)
+
                 # 跳过已被使用的司机
-                if driver_id in used_drivers:
+                if driver_id in used_driver_ids:
                     continue
-                
+
                 # 计算距离
-                driver_loc = np.array([[driver['lng'], driver['lat']]])
+                driver_loc = np.array([[driver.lng, driver.lat]])
                 distance = distance_array(order_origin, driver_loc)[0]
-                
+
                 # 更新最近司机
                 if distance < min_distance:
                     min_distance = distance
                     best_driver_id = driver_id
-                    best_driver_idx = idx
-            
+
             # 如果找到可用司机，添加到匹配列表
             if best_driver_id is not None:
                 matches.append((order_id, best_driver_id))
-                used_drivers.add(best_driver_id)
-        
+                used_driver_ids.add(best_driver_id)
+
         return matches
     
     def reposition(self,
-                   idle_drivers: pd.DataFrame,
+                   idle_drivers: List[Driver],
                    current_time: str,
                    **kwargs) -> List[Tuple[str, Tuple[float, float]]]:
         """
@@ -114,8 +106,8 @@ class ExampleAlgorithm(ODDRAlgorithmInterface):
         
         # 对每个空闲司机，随机选择一个经纬度
         reposition_plan = []
-        for _, driver in idle_drivers.iterrows():
-            driver_id = str(driver['driver_id'])
+        for driver in idle_drivers:
+            driver_id = str(driver.vehicle_id)
             target_lng = random.uniform(*lng_range)
             target_lat = random.uniform(*lat_range)
             reposition_plan.append((driver_id, (target_lng, target_lat)))

@@ -33,18 +33,17 @@ class Config:
         data_processed_dir, 'yellow_tripdata_2025-01.pickle'
     ) # 订单请求数据路径
     simulator_drivers_data_path: str = os.path.join(
-        data_processed_dir, 'df_driver_info_100.pickle'
+        data_processed_dir, 'df_driver_info.pickle'
     ) # 司机数据路径
 
     start_date: str = '2025-01-01'
     end_date: str = '2025-01-01'
     start_time: float = 0
-    end_time: float = 720
+    end_time: float = 18640  # 一天的结束时间，单位秒
     delta_t: float = 60  # 时间步长（秒）
     vehicle_speed: float = 6  # 车辆速度（米/秒）
     pickup_dis_threshold: float = 200000  # 接单距离阈值（米）
     maximum_wait_time_mean: float = 300  # 最大等待时间均值（秒）
-    request_interval: float = 60  # 订单生成间隔（秒）
     max_idle_time: float = 300  # 最大空闲时间（秒）
     num_drivers: int = 100  # 初始化的司机数量
 
@@ -77,3 +76,11 @@ class Config:
     log_level: int = 3  # 0: NO, 1: INFO(flow/warn), 2: STA(stat/loop), 3: DEBUG
     log_file_name: str = 'debug.log' # 日志文件名
     log_output_dir: str = 'debug_logs' # 日志文件存放目录 (相对于工作目录)
+    
+    # --- 地图 (Map) 参数 ---
+    map_hop_adjacency_matrix_csv_path: str = os.path.join(
+        data_processed_dir, 'hop_adjacency_matrix_remapped.csv'
+    ) # HOP 邻接矩阵 CSV 文件路径
+    map_grid_mapping_pickle_path: str = os.path.join(
+        data_processed_dir, 'region_id_mapping.pkl'
+    ) # 网格ID映射关系 Pickle 文件路径

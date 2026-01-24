@@ -14,7 +14,9 @@ from typing import Dict, Any, List, Tuple
 from .state_manager import StateManager
 from .utils import distance_array
 from config.config import Config # Add this import
-from interface.data_structure import Order # Import Order class
+from interface.data_structure import Order, OrderContext, OrderStatus, Driver, DriverContext, VehicleStatus # Import Order, OrderContext and Driver classes
+from data_processing.map import load_mapping  # 导入映射关系加载函数
+from .metrics import MetricsCalculator
 
 # 使用绝对导入（从项目根目录）
 import sys
@@ -35,8 +37,8 @@ class Simulator:
     """环境仿真器"""
     
     def __init__(self,
-                 request_all: Dict[str, Dict[str, List[Order]]], # Update type hint
-                 driver_info: pd.DataFrame,
+                 request_all: Dict[str, Dict[str, List[Order]]], # Update type hint to use Order
+                 driver_info: List[Driver],
                  algorithm: ODDRAlgorithmInterface,
                  config: Config, # Add config object
                  result_processor: ResultProcessor = None):
@@ -45,12 +47,23 @@ class Simulator:
         
         Args:
             request_all: 所有订单请求数据（字典，键为日期，内含 Order 对象列表）
-            driver_info: 司机信息DataFrame
+            driver_info: 司机信息列表
             algorithm: ODDR算法接口实例
             config: 配置对象
             result_processor: 结果处理器（可选）
         """
         self.config = config # Store config
+        
+        # 加载区域ID映射关系
+        self.mapping_dict = None  # 原始 ID -> 新 ID
+        self.reverse_mapping_dict = None  # 新 ID -> 原始 ID
+        if config.map_grid_mapping_pickle_path:
+            mapping_data = load_mapping(config.map_grid_mapping_pickle_path)
+            if mapping_data:
+                self.mapping_dict = mapping_data.get('mapping_dict')
+                self.reverse_mapping_dict = mapping_data.get('reverse_mapping_dict')
+                print(f"成功加载区域ID映射关系，共 {mapping_data.get('num_regions', 0)} 个区域")
+                logger.log_info(f"Loaded region ID mapping with {mapping_data.get('num_regions', 0)} regions", module="simulator")
 
         # 基本参数 (从 config 读取)
         self.start_date = config.start_date
@@ -62,7 +75,6 @@ class Simulator:
         self.pickup_dis_threshold = config.pickup_dis_threshold
         self.maximum_wait_time_mean = config.maximum_wait_time_mean
         self.max_idle_time = config.max_idle_time
-        self.request_interval = config.request_interval
         
         # 数据
         self.request_all = request_all
@@ -74,28 +86,28 @@ class Simulator:
         
         # 状态管理器
         self.state_manager = StateManager()
+        self.metrics_calculator = MetricsCalculator()
         
         # 实验日期
         self.experiment_date = None
-        self.curent_experiment_time = None
+        # self.curent_experiment_time = None
         
         # 计算步数
         self.finish_run_step = int(self.t_end // self.delta_t)
         
         # 初始化状态
-        self.driver_table = None
-        self.driver_reward_table = None
+        self.drivers: List[DriverContext] = []
         self.wait_requests = None
         self.matched_requests = None
+        self.expired_requests = None
         self.matched_requests_buffer = None
         self.request_databases = None
         self.time = None
         self.current_step = None
-        self.num_all_requests = None
-        
-        # 统计表
-        self.matched_requests_arrive_num = None
-        self.matched_requests_origin = None
+        self.num_all_requests = 0
+        self.total_gmv = 0.0
+        self.total_matched_requests = 0
+        self.total_all_requests = 0
     
     def reset(self, experiment_date: str):
         """
@@ -109,37 +121,21 @@ class Simulator:
         # 初始化请求数据库
         self.request_databases = deepcopy(self.request_all.get(experiment_date, {}))
         
-        # 初始化司机表
-        self.driver_table = self.state_manager.initialize_driver_table(self.driver_info)
-        # 强制将数值列转换为 float，防止 int/float 混合赋值告警
-        cols_to_float = ['remaining_time', 'target_loc_lng', 'target_loc_lat', 'total_idle_time']
-        for col in cols_to_float:
-            if col in self.driver_table.columns:
-                self.driver_table[col] = self.driver_table[col].astype(float)
-        # 强制将 matched_order_id 设为 object 类型，以便存入字符串
-        # if 'matched_order_id' in self.driver_table.columns:
-        self.driver_table['matched_order_id'] = self.driver_table['matched_order_id'].astype(object)
+        # 初始化司机
+        self.drivers = [
+            DriverContext(
+                driver=deepcopy(d),
+                target_lng=d.lng,
+                target_lat=d.lat,
+                total_idle_time=0.0
+            ) for d in self.driver_info
+        ]
 
         # 初始化订单表
-        request_tables = self.state_manager.initialize_request_tables()
-        self.wait_requests = request_tables['wait_requests']
-        self.matched_requests = request_tables['matched_requests']
+        self.wait_requests: List[OrderContext] = []
+        self.matched_requests: List[OrderContext] = []
+        self.expired_requests: List[OrderContext] = []
         self.matched_requests_buffer = []
-
-        # 初始化司机奖励表
-        self.driver_reward_table = self.state_manager.initialize_driver_reward_table(self.driver_table)
-        # 强制将奖励列转换为 float
-        if 'current_overall_reward' in self.driver_reward_table.columns:
-            self.driver_reward_table['current_overall_reward'] = \
-                self.driver_reward_table['current_overall_reward'].astype(float)
-
-        # 初始化统计表
-        time_index = pd.date_range(start=self.start_date, end=self.end_date, freq='min')
-        columns = ['time'] + [f'{i}' for i in range(263)]
-        zero_data = np.zeros((len(time_index), 263))
-        self.matched_requests_arrive_num = pd.DataFrame(zero_data, columns=columns[1:])
-        self.matched_requests_arrive_num.insert(0, 'time', time_index)
-        self.matched_requests_origin = deepcopy(self.matched_requests_arrive_num)
 
         # 初始化时间
         self.time = deepcopy(self.t_initial)
@@ -147,67 +143,8 @@ class Simulator:
         self.num_all_requests = 0
         
         # 更新时间字符串
-        result_date = datetime.strptime(self.experiment_date, "%Y-%m-%d") + timedelta(minutes=self.current_step)
-        self.curent_experiment_time = result_date.strftime("%Y-%m-%d %H:%M:%S")
-
-    
-    def get_order_driver_pairs(self, wait_requests: pd.DataFrame, driver_table: pd.DataFrame) -> pd.DataFrame:
-        """
-        获取订单-司机候选对
-        
-        Args:
-            wait_requests: 等待订单
-            driver_table: 司机表
-            
-        Returns:
-            DataFrame: 订单-司机候选对
-        """
-        idle_driver_table = driver_table[driver_table['status'] == 0]
-        num_wait_request = len(wait_requests)
-        num_idle_driver = len(idle_driver_table)
-        
-        if num_wait_request == 0 or num_idle_driver == 0:
-            return pd.DataFrame()
-        
-        # 构建候选对
-        # 使用 Order 对象的属性作为 DataFrame 的列名
-        request_array = wait_requests.loc[:, [
-            'order_id', 'trip_time', 'origin_lng', 'origin_lat', 'dest_lng', 'dest_lat',
-            'price', 'wait_time', 'max_wait_time', # 对应 Order 对象的属性
-            'origin_grid_id', 'dest_grid_id' # 添加 grid ID，如果算法需要
-        ]].values
-        request_array = np.repeat(request_array, num_idle_driver, axis=0)
-        
-        driver_loc_array = idle_driver_table.loc[:, ['lng', 'lat', 'driver_id']].values
-        driver_loc_array = np.tile(driver_loc_array, (num_wait_request, 1))
-        
-        # 计算距离
-        dis_array = distance_array(request_array[:, 2:4], driver_loc_array[:, :2])
-        
-        # 过滤距离阈值
-        flag = np.where(dis_array <= self.pickup_dis_threshold)[0]
-        
-        if len(flag) == 0:
-            return pd.DataFrame()
-        
-        # 构建DataFrame
-        # 更新 columns_name 以匹配新的 request_array 结构
-        columns_name = [
-            'driver_id', 'order_id', 'trip_time', 'origin_lng', 'origin_lat', 'dest_lng', 'dest_lat',
-            'price', 'wait_time', 'max_wait_time', # 对应 Order 对象的属性
-            'origin_grid_id', 'dest_grid_id', # 添加 grid ID
-            'order_driver_distance'
-        ]
-        # request_array 的列索引需要重新计算
-        # 假设 order_id, trip_time, origin_lng, origin_lat, dest_lng, dest_lat, price, wait_time, max_wait_time, origin_grid_id, dest_grid_id
-        # 对应 request_array 的 0-10 列
-        order_driver_pair = np.hstack((
-            driver_loc_array[flag, 2].reshape(-1, 1), # driver_id
-            request_array[flag, 0:11], # order_id 到 dest_grid_id
-            dis_array[flag].reshape(-1, 1)
-        ))
-        
-        return pd.DataFrame(order_driver_pair, columns=columns_name)
+        # result_date = datetime.strptime(self.experiment_date, "%Y-%m-%d") + timedelta(minutes=self.time)
+        # self.curent_experiment_time = result_date.strftime("%Y-%m-%d %H:%M:%S")
     
     def step(self):
         """
@@ -217,39 +154,64 @@ class Simulator:
         self._generate_new_orders()
 
         # Step 2: 获取订单-司机候选对
-        wait_requests = deepcopy(self.wait_requests)
-        driver_table = deepcopy(self.driver_table)
+        # 注意：传给算法的订单信息是一个 Order 列表
+        wait_orders = [wr.order for wr in self.wait_requests]
+        # 提取 Driver 对象列表传递给算法
+        drivers_for_algorithm = [dm.driver for dm in self.drivers]
         
-        # 添加历史订单数（如果需要）
-        # TODO: 实现历史订单数计算
-
-        # 调试打印订单-司机候选对信息
-        logger.log_order_driver_info(wait_requests, driver_table, module="simulator")
+        # Step 2.5: 如果存在映射关系，替换订单和司机中的区域 ID
+        if self.mapping_dict is not None:
+            # 深拷贝订单列表以避免修改原始数据
+            wait_orders = deepcopy(wait_orders)
+            # 替换订单中的区域 ID
+            for order in wait_orders:
+                if order.origin_grid_id in self.mapping_dict:
+                    order.origin_grid_id = self.mapping_dict[order.origin_grid_id]
+                else:
+                    logger.log_info(f"[Error!!!!] Origin grid ID {order.origin_grid_id} not found in mapping_dict", module="simulator")
+                if order.dest_grid_id in self.mapping_dict:
+                    order.dest_grid_id = self.mapping_dict[order.dest_grid_id]
+                else:
+                    logger.log_info(f"[Error!!!!] Dest grid ID {order.dest_grid_id} not found in mapping_dict", module="simulator")
+            
+            # 深拷贝司机列表以避免修改原始数据
+            drivers_for_algorithm = deepcopy(drivers_for_algorithm)
+            # 替换司机中的区域 ID
+            for driver in drivers_for_algorithm:
+                if driver.grid_id in self.mapping_dict:
+                    driver.grid_id = self.mapping_dict[driver.grid_id]
+                else:
+                    logger.log_info(f"[Error!!!!] Driver grid ID {driver.grid_id} not found in mapping_dict", module="simulator")
+                if driver.target_grid_id in self.mapping_dict:
+                    driver.target_grid_id = self.mapping_dict[driver.target_grid_id]
+                else:
+                    logger.log_info(f"[Error!!!!] Driver target grid ID {driver.target_grid_id} not found in mapping_dict", module="simulator")
         
         # Step 3: 调用算法接口
         # 调用算法进行匹配
         dispatch_plan = self.algorithm.dispatch(
-            wait_requests=wait_requests,
-            driver_table=driver_table,
-            driver_reward_table=self.driver_reward_table,
-            current_time=self.curent_experiment_time
+            wait_requests=wait_orders,
+            drivers=drivers_for_algorithm # 传递 Driver 对象列表
         )
         
         # 打印返回方案的前3条匹配
-        print("Dispatch Plan (First 3):", dispatch_plan[:3])
+        logger.log_debug(f"wait_orders total: {len(wait_orders)} (First 5): {wait_orders[:5]}", module="simulator")
+        logger.log_debug(f"drivers total: {len(drivers_for_algorithm)} (First 5): {drivers_for_algorithm[:5]}", module="simulator")
+        logger.log_debug(f"Dispatch Plan total: {len(dispatch_plan)} (First 5): {dispatch_plan[:5]}", module="simulator")
         
         # 处理返回方案
         final_plan = self.result_processor.process_dispatch_result(dispatch_plan)
         
         # Step 4: 应用匹配方案
         if len(final_plan) > 0:
-            self._apply_dispatch_plan(final_plan, wait_requests, driver_table)
+            self._apply_dispatch_plan(final_plan)
 
         # 在 update_time 之前打印调试信息
+        num_idle_drivers = sum(1 for d in self.drivers if d.driver.status == VehicleStatus.IDLE)
         logger.log_step_info(
-            step_time=self.curent_experiment_time,
+            step_time=self.time,
             num_orders=len(self.wait_requests),
-            num_idle_drivers=len(self.driver_table[self.driver_table['status'] == 0]),
+            num_idle_drivers=num_idle_drivers,
             num_matched_orders=len(self.matched_requests_buffer[0]) if self.matched_requests_buffer else 0 # buffer的第一个元素才是这个step匹配的订单
         )
         
@@ -258,225 +220,168 @@ class Simulator:
         self._update_time()
 
     def _apply_dispatch_plan(self,
-                             dispatch_plan: List[Tuple[str, str]],
-                             wait_requests: pd.DataFrame,
-                             driver_table: pd.DataFrame):
-        if len(dispatch_plan) == 0:
+                             dispatch_plan: List[Tuple[str, str]]):
+        """
+        应用匹配方案
+        
+        Args:
+            dispatch_plan: 匹配方案 [(order_id, driver_id), ...]
+        """
+        if not dispatch_plan:
             return
 
-        # 1. 预处理：快速构建匹配关系表
-        matched_pairs = pd.DataFrame(dispatch_plan, columns=['order_id', 'driver_id'])
+        # 1. 预处理：快速构建匹配关系字典
+        order_id_to_driver_id = {int(oid): int(did) for oid, did in dispatch_plan}
+        driver_id_to_driver_context = {dm.driver.vehicle_id: dm for dm in self.drivers}
         
-        # 2. 向量化计算距离 (替代原本的 iterrows 循环)
-        # 将订单坐标 merge 进来
-        matched_pairs = matched_pairs.merge(
-            wait_requests[['order_id', 'origin_lng', 'origin_lat', 'dest_lng', 'dest_lat', 'trip_time', 'price', 'max_wait_time', 'origin_grid_id', 'dest_grid_id']],
-            on='order_id', how='left'
-        )
-        # 将司机坐标 merge 进来
-        matched_pairs = matched_pairs.merge(
-            driver_table[['driver_id', 'lng', 'lat']], 
-            on='driver_id', how='left'
-        )
+        # 2. 找到匹配的 OrderContext 对象和对应的 DriverContext 对象
+        matched_order_context_list: List[OrderContext] = []
+        remaining_wait_requests: List[OrderContext] = []
         
-        # 批量计算距离 (假设 distance_array 支持 numpy 数组输入)
-        # 注意：这里需要确保 inputs 是 float 类型的 numpy array
-        coords_o = matched_pairs[['origin_lng', 'origin_lat']].values
-        coords_d = matched_pairs[['lng', 'lat']].values
-        # 假设您的 distance_array 可以接收 (N,2) 的数组并返回 (N,) 的距离
-        matched_pairs['pickup_distance'] = distance_array(coords_o, coords_d)
-        
-        # 3. 筛选有效订单 (逻辑保持不变，但利用 merge 的结果更安全)
-        valid_mask = (
-            self.wait_requests['order_id'].isin(matched_pairs['order_id']) &
-            (self.wait_requests['wait_time'] <= self.wait_requests['max_wait_time']) # 更改为 max_wait_time
-        )
-        df_matched = self.wait_requests[valid_mask].copy()
-        
-        if len(df_matched) == 0:
-            return
+        # 存储匹配成功的 (OrderContext, DriverContext) 元组
+        temp_matched_data: List[Tuple[OrderContext, DriverContext]] = []
 
-        # 确保 df_matched 和 matched_pairs 对齐
-        # 只保留那些还在 df_matched 里的 pair
-        matched_pairs = matched_pairs[matched_pairs['order_id'].isin(df_matched['order_id'])].reset_index(drop=True)
-        # 重新对齐 df_matched 的顺序以匹配 matched_pairs
-        df_matched = df_matched.set_index('order_id').loc[matched_pairs['order_id']].reset_index()
+        for om in self.wait_requests:
+            oid = om.order.order_id
+            if oid in order_id_to_driver_id:
+                driver_id = order_id_to_driver_id[oid]
+                driver_context = driver_id_to_driver_context.get(driver_id)
+                
+                if driver_context:
+                    # 计算接客距离和时间
+                    pickup_distance = distance_array(
+                        np.array([[om.order.origin_lng, om.order.origin_lat]]),
+                        np.array([[driver_context.driver.lng, driver_context.driver.lat]])
+                    )[0]
+                    pickup_time = pickup_distance / self.vehicle_speed
 
-        # 4. 批量更新司机状态 (替代原本的 for 循环查找索引)
-        driver_ids = matched_pairs['driver_id'].values
-        # 找到这些司机在 driver_table 中的 index
-        # 假设 driver_table 的 driver_id 是唯一的
-        driver_indices = self.driver_table[self.driver_table['driver_id'].isin(driver_ids)].index
+                    # 更新 OrderContext 对象
+                    om.driver_id = driver_id
+                    om.status = OrderStatus.PICKING_UP
+                    om.pickup_time = float(pickup_time)
+                    om.t_matched = self.time
+                    om.t_end = self.time + om.pickup_time + om.order.trip_time
+                    matched_order_context_list.append(om)
+
+                    # 更新 DriverContext 对象
+                    driver_context.driver.status = VehicleStatus.PICKING_UP
+                    driver_context.target_lng = om.order.dest_lng
+                    driver_context.target_lat = om.order.dest_lat
+                    driver_context.driver.remaining_travel_time = om.pickup_time + om.order.trip_time
+                    driver_context.driver.current_order_id = om.order.order_id
+                    driver_context.total_idle_time = 0.0
+                    
+                    # 收集匹配对
+                    temp_matched_data.append((om, driver_context))
+                else:
+                    remaining_wait_requests.append(om) # 司机未找到，订单仍在等待
+            else:
+                remaining_wait_requests.append(om)
         
-        if len(driver_indices) == 0:
-            return
-
-        # 5. 构建新订单数据 new_matched_requests
-        new_matched_requests = df_matched.copy()
-        new_matched_requests['t_matched'] = self.time
-        new_matched_requests['pickup_distance'] = matched_pairs['pickup_distance'].values
-        new_matched_requests['pickup_time'] = new_matched_requests['pickup_distance'].values / self.vehicle_speed
-        new_matched_requests['t_end'] = self.time + new_matched_requests['pickup_time'].values + \
-                                        new_matched_requests['trip_time'].values
-        new_matched_requests['status'] = 1
-        new_matched_requests['driver_id'] = matched_pairs['driver_id'].values
-
-        # 6. 批量更新 driver_table (向量化更新)
-        self.driver_table.loc[driver_indices, 'status'] = 1
-        # 注意：这里需要确保 loc 的顺序和 new_matched_requests 的顺序一致
-        # 为了严谨，建议通过 driver_id 映射，但如果上面是对齐的，可以直接赋值
-        # 这里简化处理，直接用 map 映射回去更新
-        driver_id_to_idx = dict(zip(self.driver_table.loc[driver_indices, 'driver_id'], driver_indices))
-        sorted_indices = [driver_id_to_idx[did] for did in new_matched_requests['driver_id']]
+        # 更新订单列表
+        self.matched_requests.extend(matched_order_context_list)
+        self.wait_requests = remaining_wait_requests
         
-        self.driver_table.loc[sorted_indices, 'target_loc_lng'] = new_matched_requests['dest_lng'].values
-        self.driver_table.loc[sorted_indices, 'target_loc_lat'] = new_matched_requests['dest_lat'].values
-        self.driver_table.loc[sorted_indices, 'remaining_time'] = (
-            new_matched_requests['t_end'].values - new_matched_requests['t_matched'].values
-        ).astype(float)
-        self.driver_table.loc[sorted_indices, 'matched_order_id'] = new_matched_requests['order_id'].values
-        self.driver_table.loc[sorted_indices, 'total_idle_time'] = 0
-
-        # 7. 批量更新奖励 (替代原本的 iterrows)
-        # 使用 groupby 统计每个司机的新增奖励和单数
-        rewards_sum = new_matched_requests.groupby('driver_id')['immediate_reward'].sum()
-        counts_sum = new_matched_requests.groupby('driver_id').size()
-        
-        # 利用 map 更新
-        mask_reward = self.driver_reward_table['driver_id'].isin(rewards_sum.index)
-        if mask_reward.any():
-            # 这种写法比循环快得多
-            self.driver_reward_table.loc[mask_reward, 'current_overall_reward'] += \
-                self.driver_reward_table.loc[mask_reward, 'driver_id'].map(rewards_sum).fillna(0)
-            self.driver_reward_table.loc[mask_reward, 'num_finished_order'] += \
-                self.driver_reward_table.loc[mask_reward, 'driver_id'].map(counts_sum).fillna(0)
-
-        # 8. 【核心修改】解决 Concat 告警和性能问题
-        # 不再直接 concat DataFrame，而是存入列表
-        self.matched_requests_buffer.append(new_matched_requests)
-        
-        # 9. 更新等待队列
-        con_matched = self.wait_requests['order_id'].isin(new_matched_requests['order_id'])
-        con_keep_wait = self.wait_requests['wait_time'] <= self.wait_requests['maximum_wait_time']
-        self.wait_requests = self.wait_requests[~con_matched & con_keep_wait].reset_index(drop=True)
+        # 将本步匹配成功的元组列表存入 buffer
+        if temp_matched_data:
+            self.matched_requests_buffer.append(temp_matched_data)
 
 
     def _generate_new_orders(self):
-        """生成新订单"""
-        count_interval = int(np.floor(self.time / self.request_interval))
-        time_key = str(count_interval * self.request_interval)
+        count_interval = int(np.floor(self.time / self.delta_t))
+        time_key = str(count_interval * self.delta_t)
 
-        if time_key not in self.request_databases:
+        # 取出当前时间点的订单
+        current_step_orders: List[Order] = self.request_databases.get(time_key)
+
+        if not current_step_orders:
             return
 
-        request_database = self.request_databases[time_key]
-        self.num_all_requests += len(request_database)
+        self.num_all_requests += len(current_step_orders)
 
-        if len(request_database) == 0:
-            return
+        # 直接用原来的 Order list 构建新的 OrderContext 列表
+        for order in current_step_orders:
+            order_context = OrderContext(
+                order=order,
+                order_date=self.experiment_date,
+                status=OrderStatus.WAITING
+            )
+            self.wait_requests.append(order_context)
 
-        # 解析订单数据
-        order_id = [request[0] for request in request_database]
-        requests = np.array([request[1:] for request in request_database])
-
-        column_name = [
-            'origin_lng', 'origin_lat', 'dest_lng', 'dest_lat', 'immediate_reward',
-            'trip_distance', 'trip_time', 'designed_reward'
-        ]
-
-        wait_info = pd.DataFrame(requests, columns=column_name)
-        wait_info['order_id'] = order_id
-        wait_info['t_start'] = self.time
-        wait_info['wait_time'] = 0
-        wait_info['status'] = 0
-        wait_info['maximum_wait_time'] = self.maximum_wait_time_mean
-        wait_info['cancel_prob'] = 0
-        wait_info['weight'] = 1.0
-
-        # 添加缺失的列
-        for col in self.state_manager.request_columns:
-            if col not in wait_info.columns:
-                wait_info[col] = None
-
-        # 显式设置列的数据类型
-        for col in wait_info.columns:
-            if wait_info[col].isna().all():
-                wait_info[col] = wait_info[col].astype(object)
-
-        # 【修改点】在拼接前检查是否为空
-        if not wait_info.empty:
-            # 如果累积池(self.wait_requests)是空的，直接赋值，不要 concat
-            if self.wait_requests.empty:
-                self.wait_requests = wait_info
-            else:
-                # 只有当两边都有数据时，才进行 concat
-                self.wait_requests = pd.concat([self.wait_requests, wait_info], ignore_index=True)
     
     def _update_state(self):
         """更新状态"""
         # 更新司机状态
-        self.driver_table = self.state_manager.update_driver_state(
-            self.driver_table, self.delta_t, self.vehicle_speed
+        self.state_manager.update_driver_state(
+            self.drivers, self.delta_t, self.vehicle_speed
         )
         
-        # 更新等待订单等待时间
-        self.wait_requests = self.state_manager.update_request_wait_time(
-            self.wait_requests, self.delta_t
-        )
+        # 更新等待订单状态（处理超时）
+        remaining_wait_requests = []
+        for om in self.wait_requests:
+            # 计算当前等待时间
+            wait_time = self.time - om.order.request_time
+            if wait_time > om.order.max_wait_time:
+                om.status = OrderStatus.EXPIRED
+                self.expired_requests.append(om)
+            else:
+                remaining_wait_requests.append(om)
+        self.wait_requests = remaining_wait_requests
         
-        # TODO：理论上应该每天整合，但是debug需要每个step看一下订单状态
-        self.finalize_run()
+        # 更新已匹配订单的状态（从 PICKING_UP 到 IN_TRIP 再到 COMPLETED）
+        for om in self.matched_requests:
+            if om.status == OrderStatus.PICKING_UP:
+                if self.time >= om.t_matched + om.pickup_time:
+                    om.status = OrderStatus.IN_TRIP
+            if om.status == OrderStatus.IN_TRIP:
+                if self.time >= om.t_end:
+                    om.status = OrderStatus.COMPLETED
         
         # 记录司机状态
-        logger.log_driver_states(self.driver_table, module="simulator")
+        logger.log_debug(f"DriverContext Info: ", self.drivers, module="simulator")
 
         # 记录进行中的订单状态
-        logger.log_in_progress_orders(self.matched_requests, module="simulator")
+        logger.log_debug(f"OrderContext Info(matched): ", self.matched_requests, module="simulator")
 
     def _update_time(self):
         """更新时间"""
         self.time += self.delta_t
         self.current_step += 1
         
-        result_date = datetime.strptime(self.experiment_date, "%Y-%m-%d") + timedelta(minutes=self.current_step)
-        self.curent_experiment_time = result_date.strftime("%Y-%m-%d %H:%M:%S")
-    
-    def get_current_state(self) -> Dict[str, Any]:
-        """
-        获取当前状态
-        
-        Returns:
-            Dict: 当前状态字典
-        """
-        return {
-            'wait_requests': self.wait_requests,
-            'driver_table': self.driver_table,
-            'driver_reward_table': self.driver_reward_table,
-            'current_time': self.curent_experiment_time,
-            'time': self.time,
-            'current_step': self.current_step
-        }
+        # result_date = datetime.strptime(self.experiment_date, "%Y-%m-%d") + timedelta(minutes=self.time)
+        # self.curent_experiment_time = result_date.strftime("%Y-%m-%d %H:%M:%S")
 
-    # 每天结束时，将列表合并回 DataFrame
+    # 每天结束时，处理 buffer
     def finalize_run(self):
         """
-        在仿真结束或需要获取完整 matched_requests 时调用
-        将列表中的数据合并回 DataFrame
+        在仿真结束或需要获取完整匹配记录时调用
         """
+        # 计算并打印当日指标
+        gmv, _ = self.metrics_calculator.calculate_and_log_metrics(
+            day=self.experiment_date,
+            matched_requests=self.matched_requests,
+            num_all_requests=self.num_all_requests
+        )
+        
+        # 累积到总指标
+        self.total_gmv += gmv
+        self.total_matched_requests += len(self.matched_requests)
+        self.total_all_requests += self.num_all_requests
+
+        # 如果是最后一天，打印总指标
+        # 注意：这里需要外部逻辑判断是否是最后一天，或者在外部循环结束后单独调用
+        # 这里仅打印当日
+        
         if self.matched_requests_buffer:
-            # 1. 批量合并 list 中的所有 DataFrame
-            new_matches = pd.concat(self.matched_requests_buffer, axis=0, ignore_index=True)
-            
-            # 2. 如果原始 matched_requests 是空的，直接赋值
-            if self.matched_requests.empty:
-                self.matched_requests = new_matches
-            else:
-                # 3. 如果不为空（极少情况），拼接到后面
-                self.matched_requests = pd.concat(
-                    [self.matched_requests, new_matches], 
-                    axis=0, 
-                    ignore_index=True
-                )
-            
-            # 4. 清空列表，防止重复合并
             self.matched_requests_buffer = []
+
+    def log_overall_metrics(self):
+        """打印所有实验日期的总计指标"""
+        total_ocr = self.total_matched_requests / self.total_all_requests if self.total_all_requests > 0 else 0.0
+        log_msg = (f"Overall Metrics: "
+                   f"Total GMV: {self.total_gmv:.2f}, "
+                   f"Total OCR: {total_ocr:.2%}, "
+                   f"Total Matched: {self.total_matched_requests}, "
+                   f"Total All: {self.total_all_requests}")
+        logger.log_info(log_msg, module="simulator")
+        print(log_msg)

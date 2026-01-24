@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Tuple
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from interface.data_structure import Order # 导入Order数据结构
+from interface.data_structure import Order, Driver
 
 import argparse
 from config.config import Config
@@ -31,7 +31,7 @@ from log_utils.logger import Logger
 logger = Logger()
 
 
-def load_data(config: Config) -> Tuple[Dict[str, Dict[str, List[Order]]], pd.DataFrame]:
+def load_data(config: Config) -> Tuple[Dict[str, Dict[str, List[Order]]], List[Driver]]:
     """
     加载数据
     
@@ -57,7 +57,7 @@ def load_data(config: Config) -> Tuple[Dict[str, Dict[str, List[Order]]], pd.Dat
     if os.path.exists(driver_file):
         with open(driver_file, 'rb') as f:
             driver_info = pickle.load(f)
-        logger.log_debug(f"Loaded Driver Info from {driver_file}", data=driver_info, module="main")
+        logger.log_debug(f"Loaded Driver Info from {driver_file}, count {len(driver_info)}", data=driver_info, module="main")
     else:
         logger.log_info(f"Warning: Driver file not found: {driver_file}, using empty DataFrame", module="main")
         driver_info = pd.DataFrame()
@@ -96,8 +96,6 @@ def run_simulation(config: Config, algorithm: ODDRAlgorithmInterface):
     )
     logger.log_info("[2/5] Simulator initialized.")
     
-    # 初始化效果计算器
-    metrics_calculator = MetricsCalculator()
     
     # 计算实验日期范围
     start_date = datetime.strptime(config.start_date, '%Y-%m-%d')
@@ -122,7 +120,7 @@ def run_simulation(config: Config, algorithm: ODDRAlgorithmInterface):
         logger.log_info(f"Running steps: {simulator.current_step} to {simulator.finish_run_step}", module="main")
         for step in range(simulator.current_step, simulator.finish_run_step):
             if step % 10 == 0:  # 每10步打印一次
-                logger.log_statistics(f"  Step {step}/{simulator.finish_run_step} - Time: {simulator.curent_experiment_time}", module="main")
+                logger.log_statistics(f"  Step {step}/{simulator.finish_run_step} - Time: {simulator.time}", module="main")
             
             # 执行一个时间步
             simulator.step()
@@ -130,72 +128,17 @@ def run_simulation(config: Config, algorithm: ODDRAlgorithmInterface):
         # 将每天的所有已完成订单整合
         simulator.finalize_run()
         
-        # 计算每日指标
-        logger.log_info(f"[4/5] Calculating metrics for {experiment_date}...", module="main")
-        daily_metrics = metrics_calculator.calculate_daily_metrics(
-            matched_requests=simulator.matched_requests,
-            driver_reward_table=simulator.driver_reward_table,
-            num_all_requests=simulator.num_all_requests
-        )
-        all_metrics.append(daily_metrics)
-        
-        # 打印每日结果
-        logger.log_statistics(f"Daily Result ({experiment_date}):")
-        logger.log_statistics(f"  GMV: {daily_metrics['gmv']:.2f}")
-        logger.log_statistics(f"  ORR: {daily_metrics['ocr'] * 100:.2f}%")
-        logger.log_statistics(f"  Matched: {daily_metrics['num_matched_requests']}/{daily_metrics['num_all_requests']}")
-        
-        # 保存每日结果
-        save_path = os.path.join(config.result_data_dir)
-        os.makedirs(save_path, exist_ok=True)
-        
-        # 保存匹配订单
-        matched_save_path = os.path.join(save_path, 'matched_requests')
-        os.makedirs(matched_save_path, exist_ok=True)
-        simulator.matched_requests.to_csv(
-            os.path.join(matched_save_path, f'matched_requests_{experiment_date}.csv'),
-            index=False
-        )
-        
-        # 保存司机奖励表
-        reward_save_path = os.path.join(save_path, 'driver_reward_table')
-        os.makedirs(reward_save_path, exist_ok=True)
-        simulator.driver_reward_table.to_csv(
-            os.path.join(reward_save_path, f'driver_reward_table_{experiment_date}.csv'),
-            index=False
-        )
-        
-        # 保存其他信息
-        others_save_path = os.path.join(save_path, 'others')
-        os.makedirs(others_save_path, exist_ok=True)
-        with open(os.path.join(others_save_path, f'others_{experiment_date}.txt'), 'w') as f:
-            f.write(f"matched requests num: {daily_metrics['num_matched_requests']}, "
-                   f"all requests num: {daily_metrics['num_all_requests']}\n")
+        # 将每天的所有已完成订单整合并记录指标
+        simulator.finalize_run()
         
         current_date += timedelta(days=1)
     
-    # 计算总体指标
+    # 打印总体指标
     logger.log_info("[5/5] Calculating overall metrics...", module="main")
-    overall_metrics = {
-        'total_gmv': sum(m['gmv'] for m in all_metrics),
-        'total_matched': sum(m['num_matched_requests'] for m in all_metrics),
-        'total_requests': sum(m['num_all_requests'] for m in all_metrics),
-        'avg_ocr': sum(m['ocr'] for m in all_metrics) / len(all_metrics) if len(all_metrics) > 0 else 0.0
-    }
-    overall_metrics['overall_ocr'] = overall_metrics['total_matched'] / overall_metrics['total_requests'] \
-        if overall_metrics['total_requests'] > 0 else 0.0
-    
-    # 保存总体结果
-    save_path = os.path.join(config.result_data_dir)
-    os.makedirs(save_path, exist_ok=True)
-    metrics_calculator.save_metrics(overall_metrics, save_path, 'overall_result.txt')
+    simulator.log_overall_metrics()
     
     logger.log_statistics("=" * 50)
     logger.log_statistics("Simulation Complete!")
-    logger.log_statistics("=" * 50)
-    logger.log_statistics(f"Total GMV: {overall_metrics['total_gmv']:.2f}")
-    logger.log_statistics(f"Overall ORR: {overall_metrics['overall_ocr'] * 100:.2f}%")
-    logger.log_statistics(f"Total Matched: {overall_metrics['total_matched']}/{overall_metrics['total_requests']}")
     logger.log_statistics("=" * 50)
 
 

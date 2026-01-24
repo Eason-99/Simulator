@@ -11,13 +11,14 @@ import pandas as pd
 from config.config import Config
 from log_utils.logger import Logger
 from interface.data_structure import Order # 导入新的Order数据结构
+from data_processing.map import load_mapping  # 导入映射加载函数
 
 # 初始化 Logger
 logger = Logger()
 
 
 class DataExtractor:
-    """数据提取器 - 当前版本仅创建空pickle占位"""
+    """数据提取器"""
     
     def __init__(self, config: Config):
         """
@@ -29,6 +30,56 @@ class DataExtractor:
         self.config = config
         self.output_dir = config.extractor_output_data_dir
         os.makedirs(self.output_dir, exist_ok=True)
+        # 加载映射关系，获取合法的区域ID列表
+        self.valid_grid_ids = self._load_valid_grid_ids()
+        # print(f"[!!!!!!!!!]valid_grid_ids: {self.valid_grid_ids}")
+    
+    def _load_valid_grid_ids(self) -> list:
+        """
+        从映射文件加载合法的区域ID列表
+        
+        Returns:
+            合法的区域ID集合
+        """
+        mapping_data = load_mapping(self.config.map_grid_mapping_pickle_path)
+        if mapping_data is None or 'mapping_dict' not in mapping_data:
+            logger.log_info(f"[Warning] Failed to load mapping data from {self.config.map_grid_mapping_pickle_path}", module="extractor")
+            return []
+        
+        # mapping_dict 的键就是合法的区域ID
+        # print(f"[!!!!!!!!!] mapping_dict: {mapping_data['mapping_dict']}")
+        valid_ids = list(mapping_data['mapping_dict'].keys())
+        logger.log_info(f"Loaded {len(valid_ids)} valid grid IDs from mapping file", module="extractor")
+        return valid_ids
+    
+    def filter_valid_orders(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        过滤订单数据，只保留起点和终点ID都合法的订单
+        
+        Args:
+            df: 包含订单数据的DataFrame，必须有 PULocationID 和 DOLocationID 列
+            
+        Returns:
+            过滤后的DataFrame
+        """
+        original_count = len(df)
+        
+        # 过滤条件：起点ID和终点ID都必须在合法ID集合中
+        valid_mask = (
+            df['PULocationID'].isin(self.valid_grid_ids) &
+            df['DOLocationID'].isin(self.valid_grid_ids)
+        )
+        
+        df_filtered = df[valid_mask].copy()
+        filtered_count = len(df_filtered)
+        removed_count = original_count - filtered_count
+        
+        logger.log_info(
+            f"Order filtering: {original_count} -> {filtered_count} (removed {removed_count} invalid orders)",
+            module="extractor"
+        )
+        
+        return df_filtered
     
     def extract_from_parquet(self, parquet_path: str, output_name: str, n_rows: int = None) -> str:
         logger.log_info(f"Starting extraction from {parquet_path}", module="extractor")
@@ -55,6 +106,9 @@ class DataExtractor:
         if n_rows is not None:
             df = df.head(n_rows)
         
+        # 0. 过滤订单：只保留起点和终点ID都合法的订单
+        df = self.filter_valid_orders(df)
+        
         # 1. 解析时间：将 tpep_pickup_datetime 转换为 datetime 对象
         df['pickup_datetime'] = pd.to_datetime(df['tpep_pickup_datetime'])
         df['date'] = df['pickup_datetime'].dt.strftime('%Y-%m-%d')
@@ -73,7 +127,7 @@ class DataExtractor:
         df_processed['order_id'] = df.index.astype(int)  # 使用索引作为 ID，并转换为 int
         df_processed['origin_grid_id'] = df['PULocationID']
         df_processed['dest_grid_id'] = df['DOLocationID']
-        df_processed['request_time'] = df['seconds'].astype(float)  # 将相对秒数作为请求时间
+        df_processed['request_time'] = df['time_key'].astype(float)  # 将相对秒数作为请求时间
         df_processed['trip_time'] = (pd.to_datetime(df['tpep_dropoff_datetime']) -
                                      df['pickup_datetime']).dt.total_seconds().astype(float)
         df_processed['price'] = df['total_amount'].astype(float)

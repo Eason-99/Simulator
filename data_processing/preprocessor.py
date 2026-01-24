@@ -1,9 +1,3 @@
-"""
-模块2：数据预处理器
-对pickle文件进行预处理，生成处理后的pickle文件
-支持：数据采样、按区域和时间增加/减少订单
-"""
-
 import pickle
 import os
 import random
@@ -14,7 +8,7 @@ import pandas as pd
 from log_utils.logger import Logger
 from config.config import Config
 from data_processing.taxi_zone_processor import TaxiZoneSpatialIndexer
-from interface.data_structure import Order # Import the new Order data structure
+from interface.data_structure import Order, Driver, VehicleStatus # Import the new Order and Driver data structures
 
 # 初始化 Logger
 logger = Logger()
@@ -228,6 +222,27 @@ class DataPreprocessor:
         logger.log_info(f"Preprocessed data saved to: {output_path}", module="preprocessor")
         logger.log_debug(f"Full extracted data structure preview for {output_path}", data=processed_data, module="preprocessor") # 包含大量订单对象数据
         return output_path
+    
+     # 与extractor.py重复的函数，可考虑移至公共模块 TODO
+    def _load_valid_grid_ids(self) -> list:
+        """
+        从映射文件加载合法的区域ID列表
+        
+        Returns:
+            合法的区域ID列表
+        """
+        
+        from data_processing.map import load_mapping  # 导入映射加载函数
+        mapping_data = load_mapping(self.config.map_grid_mapping_pickle_path)
+        if mapping_data is None or 'mapping_dict' not in mapping_data:
+            logger.log_info(f"[Warning] Failed to load mapping data from {self.config.map_grid_mapping_pickle_path}", module="preprocessor")
+            return []
+        
+        # mapping_dict 的键就是合法的区域ID
+        # print(f"[!!!!!!!!!] mapping_dict: {mapping_data['mapping_dict']}")
+        valid_ids = list(mapping_data['mapping_dict'].keys())
+        logger.log_info(f"Loaded {len(valid_ids)} valid grid IDs from mapping file", module="preprocessor")
+        return valid_ids
 
     def generate_drivers(self) -> str:
         """
@@ -237,30 +252,36 @@ class DataPreprocessor:
             生成的司机数据文件路径
         """
         logger.log_info("Generating initial driver data...", module="preprocessor")
-        boundary = self.indexer.get_boundary()
-        
-        if not boundary:
-            raise ValueError("Cannot generate drivers without taxi zone boundary information.")
-            
+        # 获取所有可用的区域编号
+        # all_zone_ids = self.indexer.get_all_zone_ids()
+        all_zone_ids = self._load_valid_grid_ids()
+
+        if not all_zone_ids:
+            raise ValueError("无法生成司机，因为没有可用的出租车区域编号。")
+
         num_drivers = self.config.num_drivers
-        driver_data = []
-        
+        driver_data: List[Driver] = []
+
         for i in range(num_drivers):
-            # 随机生成经纬度
-            lng = random.uniform(boundary['min_lng'], boundary['max_lng'])
-            lat = random.uniform(boundary['min_lat'], boundary['max_lat'])
+            # 从所有区域编号中随机选择一个作为初始位置
+            grid_id = random.choice(all_zone_ids)
             
-            # 司机信息: [编号, 经度, 纬度, 当前收入, 累计行驶距离]
-            # 根据 Simulator 中的预期格式，通常是一个 DataFrame，包含相应列
-            driver_data.append({
-                'driver_id': f"driver_{i}",
-                'lng': lng,
-                'lat': lat,
-                'income': 0.0,
-                'total_distance': 0.0
-            })
+            # 创建 Driver 对象，可选字段留空
+            driver = Driver(
+                vehicle_id=i,
+                grid_id=grid_id,
+                lng=self.indexer.get_coordinates(grid_id)[0],
+                lat=self.indexer.get_coordinates(grid_id)[1],
+                status=VehicleStatus.IDLE,
+                current_order_id=None,
+                target_grid_id=grid_id,
+                remaining_travel_time=0,
+                total_earnings=0,
+                completed_orders=0
+            )
+            driver_data.append(driver)
             
-        df_drivers = pd.DataFrame(driver_data)
+        # df_drivers = pd.DataFrame(driver_data) # Removed pandas DataFrame creation
         
         output_path = os.path.join(
             self.output_dir,
@@ -268,9 +289,8 @@ class DataPreprocessor:
         )
         
         with open(output_path, 'wb') as f:
-            pickle.dump(df_drivers, f)
+            pickle.dump(driver_data, f)
             
-        logger.log_info(f"Successfully generated {num_drivers} drivers at {output_path}", module="preprocessor")
+        logger.log_info(f"Successfully generated {len(driver_data)} drivers at {output_path}", module="preprocessor")
         
         return output_path
-

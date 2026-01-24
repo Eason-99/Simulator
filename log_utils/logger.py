@@ -141,6 +141,8 @@ class Logger:
         # 手动添加自定义级别名称前缀以区分
         prefix = f"[{self._LEVEL_NAMES.get(level, 'LOG')}] "
         self._logger.log(py_level, prefix + final_msg)
+        if self.log_level in [self.STATISTICS, self.INFO]:
+            print(prefix + final_msg)
 
     def log_statistics(self, message: str, data: Any = None, module: str = ""):
         self._log(self.STATISTICS, message, data, module=module)
@@ -156,11 +158,6 @@ class Logger:
     def log_step_info(self, step_time: str, num_orders: int, num_idle_drivers: int, num_matched_orders: int):
         msg = f"Step Time: {step_time}, Remain Orders: {num_orders}, Idle Drivers: {num_idle_drivers}, Matched Orders: {num_matched_orders}"
         self.log_debug(msg)
-
-    def log_order_driver_info(self, wait_requests: pd.DataFrame, driver_table: pd.DataFrame):
-        num_wait_requests = len(wait_requests)
-        num_idle_drivers = len(driver_table[driver_table['status'] == 0])
-        self.log_debug(f"Waiting requests: {num_wait_requests}, Idle drivers: {num_idle_drivers}")
 
     def log_driver_states(self, driver_table: pd.DataFrame):
         self.log_debug("Driver States", data=driver_table)
